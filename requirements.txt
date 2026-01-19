@@ -1,0 +1,19 @@
+# Streamlit web app
+streamlit>=1.30
+
+# Environment variable loader
+python-dotenv>=1.0
+
+# Roboflow SDK for project models
+roboflow>=1.1
+
+# Image handling
+pillow>=10.0
+
+# Roboflow inference package for pretrained models
+inference-sdk
+
+# Optional, for image processing / arrays
+numpy>=1.25
+opencv-python>=4.8
+mediapipe>=0.10.31
