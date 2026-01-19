@@ -4,16 +4,21 @@ streamlit>=1.30
 # Environment variable loader
 python-dotenv>=1.0
 
-# Roboflow SDK for project models
+# Roboflow SDK (project-based models)
 roboflow>=1.1
 
 # Image handling
 pillow>=10.0
 
-# Roboflow inference package for pretrained models
+# Optional: Roboflow hosted inference workflows
 inference-sdk
 
-# Optional, for image processing / arrays
+# Numerical processing
 numpy>=1.25
-opencv-python>=4.8
+
+# Computer vision (cloud-safe)
+opencv-python-headless
+
+# Face / pose / hand tracking
 mediapipe>=0.10.31
+
