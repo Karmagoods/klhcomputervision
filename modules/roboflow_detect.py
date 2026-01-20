@@ -1,95 +1,108 @@
 import streamlit as st
-import streamlit as st
 import os
+import io
+import tempfile
+import random
+from collections import Counter
+
 from roboflow import Roboflow
 from PIL import Image, ImageDraw, ImageFont
-import tempfile, random, io
-from collections import Counter
-import cv2
 import numpy as np
 
-# -----------------------
-# Font
-# -----------------------
+
+# =======================
+# Font setup
+# =======================
 try:
     FONT = ImageFont.truetype("arial.ttf", 16)
-except:
+except Exception:
     FONT = ImageFont.load_default()
 
-# -----------------------
-# Helpers
-# -----------------------
+
+# =======================
+# Helper functions
+# =======================
 def draw_predictions(image, predictions, threshold=50):
-    draw_image = image.copy()
-    draw = ImageDraw.Draw(draw_image)
+    """
+    Draw bounding boxes and labels on a PIL image.
+    Returns annotated image and filtered predictions.
+    """
+    output = image.copy()
+    draw = ImageDraw.Draw(output)
     colors = {}
     filtered = []
 
     for pred in predictions:
-        conf = pred.get("confidence", 0) * 100
-        if conf < threshold:
+        confidence = pred.get("confidence", 0) * 100
+        if confidence < threshold:
             continue
 
         filtered.append(pred)
 
-        x, y, w, h = pred["x"], pred["y"], pred["width"], pred["height"]
         cls = pred.get("class", "object")
+        x, y = pred["x"], pred["y"]
+        w, h = pred["width"], pred["height"]
 
         if cls not in colors:
-            colors[cls] = tuple(random.choices(range(256), k=3))
+            colors[cls] = tuple(random.randint(0, 255) for _ in range(3))
 
         color = colors[cls]
 
-        left, top = x - w / 2, y - h / 2
-        right, bottom = x + w / 2, y + h / 2
+        left = x - w / 2
+        top = y - h / 2
+        right = x + w / 2
+        bottom = y + h / 2
 
         draw.rectangle([left, top, right, bottom], outline=color, width=3)
-        draw.text((left, top - 15), f"{cls} {conf:.1f}%", fill=color, font=FONT)
+        label = f"{cls} {confidence:.1f}%"
+        draw.text((left, max(0, top - 14)), label, fill=color, font=FONT)
 
-    return draw_image, filtered
-
-
-def download_button(obj, filename, label):
-    if isinstance(obj, (dict, list)):
-        import json
-        b = io.BytesIO(json.dumps(obj, indent=2).encode())
-    else:
-        b = io.BytesIO()
-        obj.save(b, format="PNG")
-
-    b.seek(0)
-    st.download_button(label, b, file_name=filename)
+    return output, filtered
 
 
 def save_temp_image(image):
-    """Windows-safe temp image writer"""
+    """Save PIL image to a temp file (Streamlit Cloud safe)."""
     fd, path = tempfile.mkstemp(suffix=".jpg")
     os.close(fd)
     image.save(path)
     return path
 
-# -----------------------
-# App
-# -----------------------
+
+def download_button(data, filename, label):
+    """Download image or JSON data."""
+    if isinstance(data, (dict, list)):
+        import json
+        buffer = io.BytesIO(json.dumps(data, indent=2).encode())
+    else:
+        buffer = io.BytesIO()
+        data.save(buffer, format="PNG")
+
+    buffer.seek(0)
+    st.download_button(label, buffer, file_name=filename)
+
+
+# =======================
+# Main app
+# =======================
 def render():
-    st.header("📷 Roboflow Computer Vision Portal")
+    st.title("📷 Roboflow Computer Vision Portal")
 
     api_key = os.getenv("ROBOFLOW_API_KEY")
     if not api_key:
-        st.error("ROBOFLOW_API_KEY not set")
+        st.error("ROBOFLOW_API_KEY environment variable not set")
         st.stop()
 
-    # ✅ Stable Roboflow usage (same pattern that worked)
+    # --- Roboflow setup ---
     rf = Roboflow(api_key=api_key)
-    project = rf.workspace().project("your-project")   # ← change if needed
-    model = project.version(1).model                   # ← change if needed
+    project = rf.workspace().project("your-project")   # 🔁 change if needed
+    model = project.version(1).model                  # 🔁 change if needed
 
-    threshold = st.slider("Minimum confidence %", 0, 100, 50)
-    mode = st.radio("Input type", ["Image(s)", "Video", "Webcam"])
+    threshold = st.slider("Minimum confidence (%)", 0, 100, 50)
+    mode = st.radio("Input type", ["Image(s)", "Webcam"])
 
-    # -----------------------
+    # =======================
     # IMAGE MODE
-    # -----------------------
+    # =======================
     if mode == "Image(s)":
         files = st.file_uploader(
             "Upload image(s)",
@@ -98,7 +111,7 @@ def render():
         )
 
         for file in files or []:
-            image = Image.open(file)
+            image = Image.open(file).convert("RGB")
             st.subheader(file.name)
             st.image(image, use_container_width=True)
 
@@ -108,57 +121,38 @@ def render():
                     result = model.predict(path).json()
                     os.remove(path)
 
-                preds = result.get("predictions", [])
-                draw_img, filtered = draw_predictions(image, preds, threshold)
-                st.image(draw_img, use_container_width=True)
+                predictions = result.get("predictions", [])
+                annotated, filtered = draw_predictions(
+                    image, predictions, threshold
+                )
 
-                counts = Counter(p["class"] for p in filtered)
-                if counts:
+                st.image(annotated, use_container_width=True)
+
+                if filtered:
                     st.subheader("Prediction Summary")
-                    for k, v in counts.items():
-                        st.write(f"{k}: {v}")
+                    counts = Counter(p["class"] for p in filtered)
+                    for cls, count in counts.items():
+                        st.write(f"**{cls}**: {count}")
 
-                download_button(draw_img, f"{file.name}_annotated.png", "Download Image")
-                download_button(filtered, f"{file.name}_predictions.json", "Download JSON")
+                download_button(
+                    annotated,
+                    f"{file.name}_annotated.png",
+                    "Download annotated image"
+                )
+                download_button(
+                    filtered,
+                    f"{file.name}_predictions.json",
+                    "Download predictions (JSON)"
+                )
 
-    # -----------------------
-    # VIDEO MODE (first frame)
-    # -----------------------
-    elif mode == "Video":
-        video = st.file_uploader("Upload video", type=["mp4", "avi", "mov"])
-
-        if video:
-            fd, vpath = tempfile.mkstemp()
-            os.close(fd)
-            with open(vpath, "wb") as f:
-                f.write(video.read())
-
-            cap = cv2.VideoCapture(vpath)
-            success, frame = cap.read()
-            cap.release()
-            os.remove(vpath)
-
-            if success:
-                image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-                st.image(image, caption="First frame", use_container_width=True)
-
-                with st.spinner("Running inference..."):
-                    path = save_temp_image(image)
-                    result = model.predict(path).json()
-                    os.remove(path)
-
-                preds = result.get("predictions", [])
-                draw_img, _ = draw_predictions(image, preds, threshold)
-                st.image(draw_img, caption="Predictions", use_container_width=True)
-
-    # -----------------------
+    # =======================
     # WEBCAM MODE
-    # -----------------------
-    elif mode == "Webcam":
+    # =======================
+    else:
         cam = st.camera_input("Take a photo")
 
         if cam:
-            image = Image.open(cam)
+            image = Image.open(cam).convert("RGB")
             st.image(image, use_container_width=True)
 
             with st.spinner("Running inference..."):
@@ -166,12 +160,18 @@ def render():
                 result = model.predict(path).json()
                 os.remove(path)
 
-            preds = result.get("predictions", [])
-            draw_img, _ = draw_predictions(image, preds, threshold)
-            st.image(draw_img, caption="Predictions", use_container_width=True)
+            predictions = result.get("predictions", [])
+            annotated, _ = draw_predictions(
+                image, predictions, threshold
+            )
+
+            st.image(annotated, caption="Predictions", use_container_width=True)
 
     st.success("Ready ✅")
 
 
+# =======================
+# Entry point
+# =======================
 if __name__ == "__main__":
     render()

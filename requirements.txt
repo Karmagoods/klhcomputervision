@@ -7,18 +7,12 @@ python-dotenv>=1.0
 # Roboflow SDK (project-based models)
 roboflow>=1.1
 
-# Image handling
-pillow>=10.0
-
 # Optional: Roboflow hosted inference workflows
 inference-sdk
 
+# Image handling
+pillow>=10.0
+
 # Numerical processing
 numpy>=1.25
-
-# Computer vision (cloud-safe)
-opencv-python-headless
-
-# Face / pose / hand tracking
-mediapipe>=0.10.31
 
