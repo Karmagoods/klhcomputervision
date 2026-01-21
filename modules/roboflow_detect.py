@@ -2,13 +2,10 @@ import streamlit as st
 import os
 import io
 import tempfile
-import random
 from collections import Counter
 
 from roboflow import Roboflow
 from PIL import Image, ImageDraw, ImageFont
-import numpy as np
-
 
 # =======================
 # Font setup
@@ -18,35 +15,24 @@ try:
 except Exception:
     FONT = ImageFont.load_default()
 
-
 # =======================
 # Helper functions
 # =======================
-def draw_predictions(image, predictions, threshold=50):
-    """
-    Draw bounding boxes and labels on a PIL image.
-    Returns annotated image and filtered predictions.
-    """
+def draw_predictions(image, predictions, class_colors, show_boxes=True):
     output = image.copy()
     draw = ImageDraw.Draw(output)
-    colors = {}
-    filtered = []
+
+    if not show_boxes:
+        return output
 
     for pred in predictions:
-        confidence = pred.get("confidence", 0) * 100
-        if confidence < threshold:
-            continue
+        cls = pred["class"]
+        confidence = pred["confidence"] * 100
 
-        filtered.append(pred)
-
-        cls = pred.get("class", "object")
         x, y = pred["x"], pred["y"]
         w, h = pred["width"], pred["height"]
 
-        if cls not in colors:
-            colors[cls] = tuple(random.randint(0, 255) for _ in range(3))
-
-        color = colors[cls]
+        color = class_colors.get(cls, (255, 0, 0))
 
         left = x - w / 2
         top = y - h / 2
@@ -54,14 +40,17 @@ def draw_predictions(image, predictions, threshold=50):
         bottom = y + h / 2
 
         draw.rectangle([left, top, right, bottom], outline=color, width=3)
-        label = f"{cls} {confidence:.1f}%"
-        draw.text((left, max(0, top - 14)), label, fill=color, font=FONT)
+        draw.text(
+            (left, max(0, top - 14)),
+            f"{cls} {confidence:.1f}%",
+            fill=color,
+            font=FONT,
+        )
 
-    return output, filtered
+    return output
 
 
 def save_temp_image(image):
-    """Save PIL image to a temp file (Streamlit Cloud safe)."""
     fd, path = tempfile.mkstemp(suffix=".jpg")
     os.close(fd)
     image.save(path)
@@ -69,7 +58,6 @@ def save_temp_image(image):
 
 
 def download_button(data, filename, label):
-    """Download image or JSON data."""
     if isinstance(data, (dict, list)):
         import json
         buffer = io.BytesIO(json.dumps(data, indent=2).encode())
@@ -81,24 +69,30 @@ def download_button(data, filename, label):
     st.download_button(label, buffer, file_name=filename)
 
 
+def explain_results(counts):
+    parts = []
+    for cls, count in counts.items():
+        parts.append(f"{count} {cls}{'' if count == 1 else 's'}")
+    return "I detected " + " and ".join(parts) + "."
+
 # =======================
 # Main app
 # =======================
 def render():
     st.title("📷 Roboflow Computer Vision Portal")
+    st.caption("Interactive object detection & analysis")
 
     api_key = os.getenv("ROBOFLOW_API_KEY")
     if not api_key:
         st.error("ROBOFLOW_API_KEY environment variable not set")
         st.stop()
 
-    # --- Roboflow setup ---
     rf = Roboflow(api_key=api_key)
-    project = rf.workspace().project("your-project")   # 🔁 change if needed
-    model = project.version(1).model                  # 🔁 change if needed
+    project = rf.workspace().project("your-project")   # 🔁 change
+    model = project.version(1).model                  # 🔁 change
 
-    threshold = st.slider("Minimum confidence (%)", 0, 100, 50)
     mode = st.radio("Input type", ["Image(s)", "Webcam"])
+    show_boxes = st.toggle("👁 Show bounding boxes", value=True)
 
     # =======================
     # IMAGE MODE
@@ -122,17 +116,68 @@ def render():
                     os.remove(path)
 
                 predictions = result.get("predictions", [])
-                annotated, filtered = draw_predictions(
-                    image, predictions, threshold
+                if not predictions:
+                    st.warning("No objects detected.")
+                    continue
+
+                # -----------------------
+                # CLASS CONTROLS
+                # -----------------------
+                classes = sorted({p["class"] for p in predictions})
+
+                selected_classes = st.multiselect(
+                    "Select objects",
+                    classes,
+                    default=classes,
+                    key=f"classes_{file.name}"
+                )
+
+                class_colors = {}
+                class_thresholds = {}
+
+                st.subheader("🎛 Class Controls")
+                for cls in selected_classes:
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        class_colors[cls] = st.color_picker(
+                            f"{cls} color",
+                            key=f"color_{cls}_{file.name}"
+                        )
+                    with col2:
+                        class_thresholds[cls] = st.slider(
+                            f"{cls} confidence %",
+                            0, 100, 50,
+                            key=f"conf_{cls}_{file.name}"
+                        )
+
+                # -----------------------
+                # FILTER PREDICTIONS
+                # -----------------------
+                filtered = [
+                    p for p in predictions
+                    if p["class"] in selected_classes
+                    and p["confidence"] * 100 >= class_thresholds[p["class"]]
+                ]
+
+                annotated = draw_predictions(
+                    image,
+                    filtered,
+                    class_colors,
+                    show_boxes
                 )
 
                 st.image(annotated, use_container_width=True)
 
+                # -----------------------
+                # SUMMARY + AI EXPLANATION
+                # -----------------------
                 if filtered:
-                    st.subheader("Prediction Summary")
                     counts = Counter(p["class"] for p in filtered)
+                    st.subheader("📊 Summary")
                     for cls, count in counts.items():
                         st.write(f"**{cls}**: {count}")
+
+                    st.info("🤖 " + explain_results(counts))
 
                 download_button(
                     annotated,
@@ -161,14 +206,19 @@ def render():
                 os.remove(path)
 
             predictions = result.get("predictions", [])
-            annotated, _ = draw_predictions(
-                image, predictions, threshold
+            classes = sorted({p["class"] for p in predictions})
+
+            class_colors = {cls: "#ff0000" for cls in classes}
+            annotated = draw_predictions(
+                image,
+                predictions,
+                class_colors,
+                show_boxes
             )
 
-            st.image(annotated, caption="Predictions", use_container_width=True)
+            st.image(annotated, use_container_width=True)
 
     st.success("Ready ✅")
-
 
 # =======================
 # Entry point
