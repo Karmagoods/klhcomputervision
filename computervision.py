@@ -1,13 +1,19 @@
 import streamlit as st
-from modules import roboflow_detect, motion, face_detect
+from modules import (
+    roboflow_detect,
+    motion,
+    face_detect,
+    gemini3_flash_app
+)
 
 def render():
-    st.sidebar.header("Experiments")
+    st.sidebar.header("Select Tool")
 
-    mode = st.sidebar.selectbox(
-        "Select experiment",
+    tool = st.sidebar.radio(
+        "Choose a module",
         [
-            "Roboflow Object Detection",
+            "Roboflow Detect",
+            "Gemini 3 Flash (Google)",
             "Motion Detection",
             "Face Detection"
         ]
@@ -15,11 +21,11 @@ def render():
 
     st.divider()
 
-    if mode == "Roboflow Object Detection":
+    if tool == "Roboflow Detect":
         roboflow_detect.render()
-
-    elif mode == "Motion Detection":
+    elif tool == "Gemini 3 Flash (Google)":
+        gemini3_flash_app.render()
+    elif tool == "Motion Detection":
         motion.render()
-
-    elif mode == "Face Detection":
+    elif tool == "Face Detection":
         face_detect.render()
