@@ -12,7 +12,12 @@ st.set_page_config(
 
 st.title("🧪 Computer Vision Lab")
 st.caption("Experiment with pretrained computer vision models.")
-
 st.divider()
 
-computervision.render()
+try:
+    if hasattr(computervision, "render"):
+        computervision.render()
+    else:
+        st.error("computervision module does not have a render() function.")
+except Exception as e:
+    st.error(f"An unexpected error occurred: {e}")
