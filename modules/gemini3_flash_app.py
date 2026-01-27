@@ -17,6 +17,7 @@ except Exception:
 # ----------------------
 WORKFLOW_ID = "playground-gemini-3-flash-od"
 WORKSPACE = "klhinnovation"
+ROBOFLOW_API_URL = "https://serverless.roboflow.com"
 
 # ----------------------
 # Helper functions
@@ -67,40 +68,69 @@ def download_button(obj, filename, label):
     else:
         buf = io.BytesIO()
         obj.save(buf, format="PNG")
+
     buf.seek(0)
     st.download_button(label, buf, file_name=filename)
+
 
 # ----------------------
 # REQUIRED render()
 # ----------------------
 def render():
-    st.title("🤖 Gemini 3 Flash Object Detection (Google-only)")
-    st.caption("Powered by Google Gemini 3 Flash via Roboflow Workflows")
+    st.title("🤖 Gemini 3 Flash Object Detection")
+    st.caption("Google Gemini 3 Flash via Roboflow Workflows")
 
+    # 🔑 Load secrets
+    ROBOFLOW_KEY = st.secrets.get("ROBOFLOW_API_KEY") or os.getenv("ROBOFLOW_API_KEY")
     GOOGLE_KEY = st.secrets.get("GOOGLE_API_KEY") or os.getenv("GOOGLE_API_KEY")
+
+    missing = []
+    if not ROBOFLOW_KEY:
+        missing.append("ROBOFLOW_API_KEY")
     if not GOOGLE_KEY:
-        st.error("GOOGLE_API_KEY not set in secrets or .env")
+        missing.append("GOOGLE_API_KEY")
+
+    if missing:
+        st.error(f"Missing required secrets: {', '.join(missing)}")
         st.stop()
 
+    # ✅ Roboflow client (REQUIRED even for Gemini workflows)
     client = InferenceHTTPClient(
-        api_url="https://serverless.roboflow.com",
-        api_key=""  # Google handles auth
+        api_url=ROBOFLOW_API_URL,
+        api_key=ROBOFLOW_KEY
     )
 
-    st.sidebar.header("Settings")
+    # ----------------------
+    # Sidebar settings
+    # ----------------------
+    st.sidebar.header("Detection Settings")
+
     classes = st.sidebar.multiselect(
         "Classes to detect",
         ["fish", "people", "eyes"],
         default=["fish", "people", "eyes"]
     )
-    threshold = st.sidebar.slider("Confidence threshold (%)", 0, 100, 50)
-    use_cache = st.sidebar.checkbox("Cache workflow", True)
 
+    threshold = st.sidebar.slider(
+        "Confidence threshold (%)",
+        min_value=0,
+        max_value=100,
+        value=50
+    )
+
+    use_cache = st.sidebar.checkbox("Cache workflow results", True)
+
+    # ----------------------
+    # Input selection
+    # ----------------------
     mode = st.radio("Input type", ["Upload Image", "Webcam"])
     image = None
 
     if mode == "Upload Image":
-        uploaded = st.file_uploader("Upload image", ["jpg", "jpeg", "png"])
+        uploaded = st.file_uploader(
+            "Upload an image",
+            ["jpg", "jpeg", "png"]
+        )
         if uploaded:
             image = Image.open(uploaded).convert("RGB")
     else:
@@ -113,35 +143,44 @@ def render():
 
     st.image(image, use_container_width=True)
 
+    # ----------------------
+    # Run workflow
+    # ----------------------
     if st.button("Run Detection 🎯"):
-        with st.spinner("Running Gemini 3 Flash..."):
+        with st.spinner("Running Gemini 3 Flash workflow..."):
             path = save_temp_image(image)
 
-            result = client.run_workflow(
-                workspace_name=WORKSPACE,
-                workflow_id=WORKFLOW_ID,
-                images={"image": path},
-                parameters={
-                    "classes": classes,
-                    "model_api_key": GOOGLE_KEY
-                },
-                use_cache=use_cache
-            )
-
-            os.remove(path)
+            try:
+                result = client.run_workflow(
+                    workspace_name=WORKSPACE,
+                    workflow_id=WORKFLOW_ID,
+                    images={"image": path},
+                    parameters={
+                        "classes": classes,
+                        "model_api_key": GOOGLE_KEY
+                    },
+                    use_cache=use_cache
+                )
+            finally:
+                os.remove(path)
 
         predictions = result.get("predictions", [])
-        annotated, filtered = draw_predictions(image, predictions, threshold)
+
+        annotated, filtered = draw_predictions(
+            image,
+            predictions,
+            threshold
+        )
 
         st.image(annotated, use_container_width=True)
 
         if filtered:
             st.subheader("Summary")
             counts = Counter(p["class"] for p in filtered)
-            for k, v in counts.items():
-                st.write(f"**{k}**: {v}")
+            for cls, count in counts.items():
+                st.write(f"**{cls}**: {count}")
 
-        download_button(annotated, "annotated.png", "Download Image")
-        download_button(filtered, "predictions.json", "Download JSON")
+        download_button(annotated, "annotated.png", "⬇ Download Annotated Image")
+        download_button(filtered, "predictions.json", "⬇ Download Predictions JSON")
 
-        st.success("Done ✅")
+        st.success("Detection complete ✅")

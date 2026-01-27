@@ -4,6 +4,8 @@ venv311/
 __pycache__/
 .env
 *.pyc
+.streamlit/secrets.toml
+
 
 # OS
 .DS_Store
