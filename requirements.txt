@@ -1,18 +1,20 @@
 # Streamlit web app
-streamlit>=1.30
+streamlit>=1.30,<2.0
 
-# Environment variable loader
+# Environment variables
 python-dotenv>=1.0
 
 # Roboflow SDK (project-based models)
 roboflow>=1.1
 
-# Optional: Roboflow hosted inference workflows
-inference-sdk
+# Roboflow hosted inference workflows
+inference-sdk>=0.14
 
 # Image handling
 pillow>=10.0
 
 # Numerical processing
-numpy>=1.25
-opencv-python-headless
+numpy>=1.25,<2.0
+
+# OpenCV (HEADLESS ONLY – REQUIRED for Streamlit Cloud)
+opencv-python-headless>=4.9
