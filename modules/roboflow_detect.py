@@ -1,181 +1,175 @@
 import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
-import tempfile, io
+import tempfile, io, os, random
 from collections import Counter
-import os
-import random
 
-# =======================
-# Font setup
-# =======================
 try:
-    FONT = ImageFont.truetype("arial.ttf", 16)
+    from inference_sdk import InferenceHTTPClient
+except ImportError:
+    InferenceHTTPClient = None
+
+# ----------------------
+# Font
+# ----------------------
+try:
+    FONT = ImageFont.truetype("arial.ttf", 15)
 except Exception:
     FONT = ImageFont.load_default()
 
-# =======================
-# Helper functions
-# =======================
-def draw_predictions(image: Image.Image, predictions: list, class_colors: dict, show_boxes: bool = True):
-    output = image.copy()
-    draw = ImageDraw.Draw(output)
+ROBOFLOW_URL = "https://serverless.roboflow.com"
 
-    if not show_boxes:
-        return output
+# Curated public Roboflow models (model_id format: workspace/model/version)
+PRESET_MODELS = {
+    "COCO (YOLOv8n) — 80 classes": "coco/3",
+    "People Detection": "people-detection-o4rdr/9",
+    "Face Detection": "face-detection-mik1i/18",
+    "Vehicle Detection": "vehicle-detection-3mmwj/1",
+    "Custom (enter below)": "__custom__",
+}
+
+
+def _draw_predictions(image, predictions, threshold, label_map=None):
+    draw_image = image.copy()
+    draw = ImageDraw.Draw(draw_image)
+    colors = {}
+    filtered = []
 
     for pred in predictions:
-        cls = pred["class"]
         conf = pred.get("confidence", 0) * 100
+        if conf < threshold:
+            continue
 
-        if cls not in class_colors:
-            class_colors[cls] = tuple(random.choices(range(256), k=3))
+        cls = pred.get("class", "object")
+        display = label_map.get(cls, cls) if label_map else cls
+        filtered.append(pred)
+
+        if cls not in colors:
+            colors[cls] = tuple(random.choices(range(50, 230), k=3))
 
         x, y, w, h = pred["x"], pred["y"], pred["width"], pred["height"]
-        left, top = x - w/2, y - h/2
-        right, bottom = x + w/2, y + h/2
+        left, top     = x - w / 2, y - h / 2
+        right, bottom = x + w / 2, y + h / 2
 
-        draw.rectangle([left, top, right, bottom], outline=class_colors[cls], width=3)
-        draw.text((left, max(0, top - 14)), f"{cls} {conf:.1f}%", fill=class_colors[cls], font=FONT)
-
-    return output
-
-def save_temp_image(image: Image.Image):
-    fd, path = tempfile.mkstemp(suffix=".jpg")
-    os.close(fd)
-    image.save(path)
-    return path
-
-def download_button(obj, filename: str, label: str):
-    if isinstance(obj, (dict, list)):
-        import json
-        buffer = io.BytesIO(json.dumps(obj, indent=2).encode())
-    else:
-        buffer = io.BytesIO()
-        obj.save(buffer, format="PNG")
-    buffer.seek(0)
-    st.download_button(label, buffer, file_name=filename)
-
-def explain_results(counts: dict) -> str:
-    parts = [f"{count} {cls}{'' if count == 1 else 's'}" for cls, count in counts.items()]
-    return "I detected " + " and ".join(parts) + "."
-
-# =======================
-# Main App
-# =======================
-def render():
-    st.title("📷 Roboflow Computer Vision Portal")
-    st.caption("Interactive object detection & analysis")
-
-    api_key = os.getenv("ROBOFLOW_API_KEY")
-    if not api_key:
-        st.error("ROBOFLOW_API_KEY environment variable not set")
-        st.stop()
-
-    # Lazy import to avoid startup errors in cloud
-    from roboflow import Roboflow
-    rf = Roboflow(api_key=api_key)
-    project = rf.workspace().project("your-project")  # 🔁 change
-    model = project.version(1).model                  # 🔁 change
-
-    mode = st.radio("Input type", ["Image(s)", "Webcam"])
-    show_boxes = st.checkbox("👁 Show bounding boxes", value=True)
-
-    # ----------------------
-    # IMAGE MODE
-    # ----------------------
-    if mode == "Image(s)":
-        files = st.file_uploader(
-            "Upload image(s)",
-            type=["jpg", "jpeg", "png"],
-            accept_multiple_files=True
+        draw.rectangle([left, top, right, bottom], outline=colors[cls], width=3)
+        draw.text(
+            (left, max(0, top - 16)),
+            f"{display} {conf:.1f}%",
+            fill=colors[cls],
+            font=FONT
         )
 
-        for file in files or []:
-            image = Image.open(file).convert("RGB")
-            st.subheader(file.name)
-            st.image(image, use_container_width=True)
+    return draw_image, filtered
 
-            if st.button(f"Run Detection 🎯 ({file.name})", key=file.name):
-                with st.spinner("Running inference..."):
-                    path = save_temp_image(image)
-                    result = model.predict(path).json()
-                    os.remove(path)
 
-                predictions = result.get("predictions", [])
-                if not predictions:
-                    st.warning("No objects detected.")
-                    continue
+def _save_temp(image):
+    fd, path = tempfile.mkstemp(suffix=".jpg")
+    os.close(fd)
+    image.save(path, quality=95)
+    return path
 
-                # ----------------------
-                # CLASS CONTROLS
-                # ----------------------
-                classes = sorted({p["class"] for p in predictions})
-                selected_classes = st.multiselect(
-                    "Select objects to display",
-                    classes,
-                    default=classes,
-                    key=f"classes_{file.name}"
-                )
 
-                class_colors, class_thresholds = {}, {}
-                st.subheader("🎛 Class Controls")
-                for cls in selected_classes:
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        class_colors[cls] = st.color_picker(
-                            f"{cls} color", value="#FF0000", key=f"color_{cls}_{file.name}"
-                        )
-                    with col2:
-                        class_thresholds[cls] = st.slider(
-                            f"{cls} confidence %",
-                            0, 100, 50,
-                            key=f"conf_{cls}_{file.name}"
-                        )
+def _download_button(obj, filename, label):
+    if isinstance(obj, (dict, list)):
+        import json
+        buf = io.BytesIO(json.dumps(obj, indent=2).encode())
+    else:
+        buf = io.BytesIO()
+        obj.save(buf, format="PNG")
+    buf.seek(0)
+    st.download_button(label, buf, file_name=filename)
 
-                # Filter predictions
-                filtered = [
-                    p for p in predictions
-                    if p["class"] in selected_classes
-                    and p.get("confidence", 0) * 100 >= class_thresholds[p["class"]]
-                ]
 
-                annotated = draw_predictions(image, filtered, class_colors, show_boxes)
-                st.image(annotated, use_container_width=True)
+def render():
+    st.header("🔍 Roboflow Object Detection")
+    st.caption("Run any Roboflow model via the Inference API.")
 
-                if filtered:
-                    counts = Counter(p["class"] for p in filtered)
-                    st.subheader("📊 Summary")
-                    for cls, count in counts.items():
-                        st.write(f"**{cls}**: {count}")
-                    st.info("🤖 " + explain_results(counts))
+    if InferenceHTTPClient is None:
+        st.error("The `inference-sdk` package is not installed. Add it to requirements.txt.")
+        st.stop()
 
-                download_button(annotated, f"{file.name}_annotated.png", "Download annotated image")
-                download_button(filtered, f"{file.name}_predictions.json", "Download predictions (JSON)")
+    ROBOFLOW_KEY = st.secrets.get("ROBOFLOW_API_KEY") or os.getenv("ROBOFLOW_API_KEY")
+    if not ROBOFLOW_KEY:
+        st.error("Missing `ROBOFLOW_API_KEY` secret.")
+        st.stop()
 
-    # ----------------------
-    # WEBCAM MODE
-    # ----------------------
+    client = InferenceHTTPClient(api_url=ROBOFLOW_URL, api_key=ROBOFLOW_KEY)
+
+    # --- Sidebar ---
+    st.sidebar.subheader("Model Settings")
+
+    model_label = st.sidebar.selectbox("Preset model", list(PRESET_MODELS.keys()))
+    model_id = PRESET_MODELS[model_label]
+
+    if model_id == "__custom__":
+        model_id = st.sidebar.text_input(
+            "Custom model ID",
+            placeholder="workspace/model/version",
+            help="e.g. klhinnovation/my-model/1"
+        )
+
+    threshold = st.sidebar.slider("Confidence threshold (%)", 0, 100, 40)
+
+    # --- Input ---
+    mode = st.radio("Input source", ["Upload Image", "Webcam"], horizontal=True)
+    image = None
+
+    if mode == "Upload Image":
+        uploaded = st.file_uploader("Upload an image", ["jpg", "jpeg", "png"])
+        if uploaded:
+            image = Image.open(uploaded).convert("RGB")
     else:
         cam = st.camera_input("Take a photo")
         if cam:
             image = Image.open(cam).convert("RGB")
-            st.image(image, use_container_width=True)
 
-            with st.spinner("Running inference..."):
-                path = save_temp_image(image)
-                result = model.predict(path).json()
-                os.remove(path)
+    if not image:
+        return
 
-            predictions = result.get("predictions", [])
-            classes = sorted({p["class"] for p in predictions})
-            class_colors = {cls: "#FF0000" for cls in classes}
-            annotated = draw_predictions(image, predictions, class_colors, show_boxes)
-            st.image(annotated, use_container_width=True)
+    st.image(image, caption="Input image", use_container_width=True)
 
-    st.success("Ready ✅")
+    if not model_id or model_id == "__custom__":
+        st.info("Enter a model ID in the sidebar to continue.")
+        return
 
-# =======================
-# Entry point
-# =======================
-if __name__ == "__main__":
-    render()
+    if not st.button("Run Detection 🎯"):
+        return
+
+    with st.spinner(f"Running `{model_id}`…"):
+        path = _save_temp(image)
+        try:
+            result = client.infer(path, model_id=model_id)
+        except Exception as e:
+            st.error(f"Inference error: {e}")
+            return
+        finally:
+            os.remove(path)
+
+    predictions = result.get("predictions", [])
+
+    if not predictions:
+        st.warning("No objects detected above the threshold. Try a lower confidence setting.")
+        return
+
+    annotated, filtered = _draw_predictions(image, predictions, threshold)
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.image(image, caption="Original", use_container_width=True)
+    with col2:
+        st.image(annotated, caption="Annotated", use_container_width=True)
+
+    if filtered:
+        st.subheader("Detection Summary")
+        counts = Counter(p["class"] for p in filtered)
+        cols = st.columns(min(len(counts), 4))
+        for i, (cls, cnt) in enumerate(counts.items()):
+            cols[i % len(cols)].metric(cls.title(), cnt)
+
+    st.divider()
+    c1, c2 = st.columns(2)
+    with c1:
+        _download_button(annotated, "annotated.png", "⬇ Download Annotated Image")
+    with c2:
+        _download_button(filtered, "predictions.json", "⬇ Download Predictions JSON")
+
+    st.success("✅ Detection complete.")

@@ -2,68 +2,137 @@ import streamlit as st
 import numpy as np
 from PIL import Image
 
-# --- OpenCV guard (prevents hard crash on cloud imports) ---
 try:
     import cv2
 except Exception:
     cv2 = None
 
 
+def _to_gray_blur(image_array):
+    gray = cv2.cvtColor(image_array, cv2.COLOR_RGB2GRAY)
+    return cv2.GaussianBlur(gray, (21, 21), 0)
+
+
+def _detect_motion(frame_a, frame_b, threshold=25):
+    """
+    Compare two blurred grayscale frames.
+    Returns: diff image, binary mask, contour-annotated colour image, motion %
+    """
+    diff = cv2.absdiff(frame_a, frame_b)
+    _, mask = cv2.threshold(diff, threshold, 255, cv2.THRESH_BINARY)
+    mask = cv2.dilate(mask, None, iterations=2)
+
+    # Motion percentage
+    motion_pct = (np.count_nonzero(mask) / mask.size) * 100
+
+    # Draw contours on a blank colour canvas
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    canvas = np.zeros((*mask.shape, 3), dtype=np.uint8)
+    cv2.drawContours(canvas, contours, -1, (0, 255, 100), 2)
+
+    return diff, mask, canvas, motion_pct, contours
+
+
 def render():
-    st.header("🏃 Motion Detection (Frame Difference)")
+    st.header("🏃 Motion Detection")
 
     if cv2 is None:
         st.error(
-            "OpenCV is not available in this environment.\n\n"
-            "Motion detection requires a local or Docker-based deployment."
+            "Motion detection requires **OpenCV**.\n\n"
+            "This library is not available in this cloud environment. "
+            "Run locally or in Docker."
         )
         st.stop()
 
-    st.caption("Upload two images sequentially to detect motion between them.")
+    st.caption("Compare two frames to detect motion using frame differencing.")
 
-    file = st.file_uploader(
-        "Upload image",
-        type=["jpg", "jpeg", "png"]
-    )
+    # --- Settings ---
+    with st.expander("⚙️ Settings", expanded=False):
+        threshold = st.slider("Pixel difference threshold", 5, 100, 25,
+                              help="Lower = more sensitive to subtle motion")
+        min_contour_area = st.slider("Min contour area (px²)", 100, 5000, 500,
+                                     help="Filter out tiny noise blobs")
 
-    if not file:
+    # --- Input mode ---
+    mode = st.radio("Input mode", ["Upload Two Images", "Webcam Sequence"], horizontal=True)
+
+    frame_a = frame_b = None
+
+    if mode == "Upload Two Images":
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("**Frame A — Reference**")
+            file_a = st.file_uploader("Reference frame", type=["jpg", "jpeg", "png"],
+                                      key="motion_a")
+            if file_a:
+                frame_a = np.array(Image.open(file_a).convert("RGB"))
+                st.image(frame_a, use_container_width=True)
+
+        with col2:
+            st.markdown("**Frame B — Comparison**")
+            file_b = st.file_uploader("Comparison frame", type=["jpg", "jpeg", "png"],
+                                      key="motion_b")
+            if file_b:
+                frame_b = np.array(Image.open(file_b).convert("RGB"))
+                st.image(frame_b, use_container_width=True)
+
+    else:
+        st.info("Take two photos in sequence. The first becomes the reference frame.")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("**Frame A — Reference**")
+            cam_a = st.camera_input("Reference photo", key="cam_a")
+            if cam_a:
+                frame_a = np.array(Image.open(cam_a).convert("RGB"))
+
+        with col2:
+            st.markdown("**Frame B — Comparison**")
+            cam_b = st.camera_input("Comparison photo", key="cam_b")
+            if cam_b:
+                frame_b = np.array(Image.open(cam_b).convert("RGB"))
+
+    # --- Run detection ---
+    if frame_a is None or frame_b is None:
+        st.info("Provide both frames to run motion detection.")
         return
 
-    # --- Load image safely ---
-    image = np.array(Image.open(file).convert("RGB"))
+    # Resize B to match A if needed
+    if frame_a.shape != frame_b.shape:
+        pil_b = Image.fromarray(frame_b).resize(
+            (frame_a.shape[1], frame_a.shape[0]), Image.LANCZOS
+        )
+        frame_b = np.array(pil_b)
 
-    # --- Preprocessing ---
-    gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-    blur = cv2.GaussianBlur(gray, (21, 21), 0)
+    with st.spinner("Analysing motion…"):
+        blur_a = _to_gray_blur(frame_a)
+        blur_b = _to_gray_blur(frame_b)
+        diff, mask, contour_canvas, motion_pct, contours = _detect_motion(
+            blur_a, blur_b, threshold
+        )
 
-    # --- First frame ---
-    if "prev_frame" not in st.session_state:
-        st.session_state.prev_frame = blur
-        st.info("First frame stored. Upload another image to detect motion.")
-        st.image(image, caption="Reference Frame", use_container_width=True)
-        return
+        # Filter small contours
+        significant = [c for c in contours if cv2.contourArea(c) >= min_contour_area]
 
-    # --- Motion detection ---
-    diff = cv2.absdiff(st.session_state.prev_frame, blur)
-    _, thresh = cv2.threshold(diff, 25, 255, cv2.THRESH_BINARY)
+    st.divider()
+    st.subheader("Results")
 
-    # Optional cleanup
-    thresh = cv2.dilate(thresh, None, iterations=2)
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.image(diff, caption="Pixel Difference", use_container_width=True, clamp=True)
+    with c2:
+        st.image(mask, caption="Motion Mask", use_container_width=True)
+    with c3:
+        st.image(contour_canvas, caption="Motion Contours", use_container_width=True)
 
-    # --- Display results ---
-    col1, col2 = st.columns(2)
+    st.divider()
+    m1, m2 = st.columns(2)
+    m1.metric("Motion Coverage", f"{motion_pct:.2f}%")
+    m2.metric("Significant Motion Regions", len(significant))
 
-    with col1:
-        st.image(image, caption="Current Frame", use_container_width=True)
-
-    with col2:
-        st.image(thresh, caption="Motion Mask", use_container_width=True)
-
-    # --- Reset / update state ---
-    st.session_state.prev_frame = blur
-
-    if st.button("🔄 Reset Reference Frame"):
-        del st.session_state.prev_frame
-        st.success("Reference frame reset. Upload a new image.")
-
-    st.success("Motion detection complete ✅")
+    if motion_pct < 1:
+        st.success("✅ Minimal motion detected between frames.")
+    elif motion_pct < 10:
+        st.warning(f"⚠️ Moderate motion detected ({motion_pct:.1f}% of frame).")
+    else:
+        st.error(f"🚨 High motion detected ({motion_pct:.1f}% of frame).")

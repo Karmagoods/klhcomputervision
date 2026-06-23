@@ -6,26 +6,24 @@ from modules import (
     gemini3_flash_app
 )
 
-def render():
-    st.sidebar.header("Select Tool")
+TOOLS = {
+    "🔍 Roboflow Detect": roboflow_detect,
+    "✨ Gemini 3 Flash": gemini3_flash_app,
+    "🏃 Motion Detection": motion,
+    "🙂 Face Detection": face_detect,
+}
 
-    tool = st.sidebar.radio(
+def render():
+    st.sidebar.header("🧪 CV Lab")
+    st.sidebar.markdown("---")
+
+    tool_name = st.sidebar.radio(
         "Choose a module",
-        [
-            "Roboflow Detect",
-            "Gemini 3 Flash (Google)",
-            "Motion Detection",
-            "Face Detection"
-        ]
+        list(TOOLS.keys()),
+        label_visibility="collapsed"
     )
 
-    st.divider()
+    st.sidebar.markdown("---")
+    st.sidebar.caption("Built with MediaPipe · OpenCV · Roboflow · Google Gemini")
 
-    if tool == "Roboflow Detect":
-        roboflow_detect.render()
-    elif tool == "Gemini 3 Flash (Google)":
-        gemini3_flash_app.render()
-    elif tool == "Motion Detection":
-        motion.render()
-    elif tool == "Face Detection":
-        face_detect.render()
+    TOOLS[tool_name].render()
