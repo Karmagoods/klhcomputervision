@@ -1,36 +1,55 @@
 import streamlit as st
+import requests
+import base64
+import io
+import os
+import random
 from PIL import Image, ImageDraw, ImageFont
-import tempfile, io, os, random
 from collections import Counter
 
-try:
-    from inference_sdk import InferenceHTTPClient
-except ImportError:
-    InferenceHTTPClient = None
-
-# ----------------------
-# Font
-# ----------------------
 try:
     FONT = ImageFont.truetype("arial.ttf", 15)
 except Exception:
     FONT = ImageFont.load_default()
 
-ROBOFLOW_URL = "https://serverless.roboflow.com"
+ROBOFLOW_INFER_URL = "https://detect.roboflow.com"
 
-# Curated public Roboflow models (model_id format: workspace/model/version)
 PRESET_MODELS = {
-    "COCO (YOLOv8n) — 80 classes": "coco/3",
-    "People Detection": "people-detection-o4rdr/9",
-    "Face Detection": "face-detection-mik1i/18",
-    "Vehicle Detection": "vehicle-detection-3mmwj/1",
-    "Custom (enter below)": "__custom__",
+    "COCO YOLOv8n — 80 classes": {"model": "coco", "version": "3"},
+    "People Detection":           {"model": "people-detection-o4rdr", "version": "9"},
+    "Face Detection":             {"model": "face-detection-mik1i", "version": "18"},
+    "Vehicle Detection":          {"model": "vehicle-detection-3mmwj", "version": "1"},
+    "Custom (enter below)":       None,
 }
 
 
-def _draw_predictions(image, predictions, threshold, label_map=None):
-    draw_image = image.copy()
-    draw = ImageDraw.Draw(draw_image)
+def _image_to_base64(image: Image.Image) -> str:
+    buf = io.BytesIO()
+    image.save(buf, format="JPEG", quality=90)
+    buf.seek(0)
+    return base64.b64encode(buf.read()).decode("utf-8")
+
+
+def _run_inference(image: Image.Image, model: str, version: str, api_key: str, confidence: int) -> list:
+    """Call Roboflow infer REST endpoint directly — no SDK required."""
+    url = f"{ROBOFLOW_INFER_URL}/{model}/{version}"
+    b64 = _image_to_base64(image)
+
+    resp = requests.post(
+        url,
+        params={"api_key": api_key, "confidence": confidence / 100},
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        data=b64,
+        timeout=30,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    return data.get("predictions", [])
+
+
+def _draw_predictions(image: Image.Image, predictions: list, threshold: int) -> tuple:
+    annotated = image.copy()
+    draw = ImageDraw.Draw(annotated)
     colors = {}
     filtered = []
 
@@ -40,32 +59,22 @@ def _draw_predictions(image, predictions, threshold, label_map=None):
             continue
 
         cls = pred.get("class", "object")
-        display = label_map.get(cls, cls) if label_map else cls
         filtered.append(pred)
 
         if cls not in colors:
             colors[cls] = tuple(random.choices(range(50, 230), k=3))
 
         x, y, w, h = pred["x"], pred["y"], pred["width"], pred["height"]
-        left, top     = x - w / 2, y - h / 2
-        right, bottom = x + w / 2, y + h / 2
+        left, top     = int(x - w / 2), int(y - h / 2)
+        right, bottom = int(x + w / 2), int(y + h / 2)
 
         draw.rectangle([left, top, right, bottom], outline=colors[cls], width=3)
-        draw.text(
-            (left, max(0, top - 16)),
-            f"{display} {conf:.1f}%",
-            fill=colors[cls],
-            font=FONT
-        )
+        label = f"{cls} {conf:.1f}%"
+        text_y = max(0, top - 18)
+        draw.rectangle([left, text_y, left + len(label) * 7, text_y + 16], fill=colors[cls])
+        draw.text((left + 2, text_y), label, fill="black", font=FONT)
 
-    return draw_image, filtered
-
-
-def _save_temp(image):
-    fd, path = tempfile.mkstemp(suffix=".jpg")
-    os.close(fd)
-    image.save(path, quality=95)
-    return path
+    return annotated, filtered
 
 
 def _download_button(obj, filename, label):
@@ -81,73 +90,69 @@ def _download_button(obj, filename, label):
 
 def render():
     st.header("🔍 Roboflow Object Detection")
-    st.caption("Run any Roboflow model via the Inference API.")
-
-    if InferenceHTTPClient is None:
-        st.error("The `inference-sdk` package is not installed. Add it to requirements.txt.")
-        st.stop()
+    st.caption("Run any Roboflow model via direct REST API — no SDK required.")
 
     ROBOFLOW_KEY = st.secrets.get("ROBOFLOW_API_KEY") or os.getenv("ROBOFLOW_API_KEY")
     if not ROBOFLOW_KEY:
         st.error("Missing `ROBOFLOW_API_KEY` secret.")
         st.stop()
 
-    client = InferenceHTTPClient(api_url=ROBOFLOW_URL, api_key=ROBOFLOW_KEY)
-
-    # --- Sidebar ---
+    # Sidebar
     st.sidebar.subheader("Model Settings")
-
     model_label = st.sidebar.selectbox("Preset model", list(PRESET_MODELS.keys()))
-    model_id = PRESET_MODELS[model_label]
+    model_cfg = PRESET_MODELS[model_label]
 
-    if model_id == "__custom__":
-        model_id = st.sidebar.text_input(
-            "Custom model ID",
-            placeholder="workspace/model/version",
-            help="e.g. klhinnovation/my-model/1"
-        )
+    custom_model = custom_version = None
+    if model_cfg is None:
+        custom_input = st.sidebar.text_input("Model ID", placeholder="my-model")
+        custom_version = st.sidebar.text_input("Version", placeholder="1")
+        if custom_input and custom_version:
+            custom_model = custom_input
 
     threshold = st.sidebar.slider("Confidence threshold (%)", 0, 100, 40)
 
-    # --- Input ---
+    # Input
     mode = st.radio("Input source", ["Upload Image", "Webcam"], horizontal=True)
     image = None
 
     if mode == "Upload Image":
-        uploaded = st.file_uploader("Upload an image", ["jpg", "jpeg", "png"])
-        if uploaded:
-            image = Image.open(uploaded).convert("RGB")
+        f = st.file_uploader("Upload image", type=["jpg", "jpeg", "png"])
+        if f:
+            image = Image.open(f).convert("RGB")
     else:
         cam = st.camera_input("Take a photo")
         if cam:
             image = Image.open(cam).convert("RGB")
 
-    if not image:
+    if image is None:
         return
 
     st.image(image, caption="Input image", use_container_width=True)
 
-    if not model_id or model_id == "__custom__":
-        st.info("Enter a model ID in the sidebar to continue.")
+    # Resolve model/version
+    if model_cfg:
+        model, version = model_cfg["model"], model_cfg["version"]
+    elif custom_model and custom_version:
+        model, version = custom_model, custom_version
+    else:
+        st.info("Enter a model ID and version in the sidebar.")
         return
 
     if not st.button("Run Detection 🎯"):
         return
 
-    with st.spinner(f"Running `{model_id}`…"):
-        path = _save_temp(image)
+    with st.spinner(f"Running `{model}/{version}`…"):
         try:
-            result = client.infer(path, model_id=model_id)
-        except Exception as e:
-            st.error(f"Inference error: {e}")
+            predictions = _run_inference(image, model, version, ROBOFLOW_KEY, threshold)
+        except requests.HTTPError as e:
+            st.error(f"Roboflow API error {e.response.status_code}: {e.response.text[:300]}")
             return
-        finally:
-            os.remove(path)
-
-    predictions = result.get("predictions", [])
+        except Exception as e:
+            st.error(f"Request failed: {e}")
+            return
 
     if not predictions:
-        st.warning("No objects detected above the threshold. Try a lower confidence setting.")
+        st.warning("No objects detected. Try lowering the confidence threshold.")
         return
 
     annotated, filtered = _draw_predictions(image, predictions, threshold)
@@ -158,12 +163,11 @@ def render():
     with col2:
         st.image(annotated, caption="Annotated", use_container_width=True)
 
-    if filtered:
-        st.subheader("Detection Summary")
-        counts = Counter(p["class"] for p in filtered)
-        cols = st.columns(min(len(counts), 4))
-        for i, (cls, cnt) in enumerate(counts.items()):
-            cols[i % len(cols)].metric(cls.title(), cnt)
+    counts = Counter(p["class"] for p in filtered)
+    st.subheader("Detection Summary")
+    cols = st.columns(min(len(counts), 4))
+    for i, (cls, cnt) in enumerate(counts.items()):
+        cols[i % len(cols)].metric(cls.title(), cnt)
 
     st.divider()
     c1, c2 = st.columns(2)
