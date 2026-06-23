@@ -2,15 +2,15 @@ import streamlit as st
 import numpy as np
 from PIL import Image
 
-try:
-    import cv2
-except Exception:
-    cv2 = None
+_import_error = None
 
 try:
+    import cv2
     import mediapipe as mp
-except Exception:
+except Exception as e:
+    cv2 = None
     mp = None
+    _import_error = str(e)
 
 
 def _process_image(image_array):
@@ -52,11 +52,13 @@ def render():
     st.header("🙂 Face Detection")
 
     if cv2 is None or mp is None:
-        st.error(
-            "Face detection requires **OpenCV** and **MediaPipe**.\n\n"
-            "These libraries are not available in this cloud environment. "
-            "Run locally or in Docker."
-        )
+        st.error("Face detection requires OpenCV and MediaPipe.")
+        if _import_error:
+            st.code(_import_error, language="text")
+            st.info(
+                "If deploying to Streamlit Cloud, ensure `packages.txt` contains:\n"
+                "```\nlibgl1-mesa-glx\nlibglib2.0-0\n```"
+            )
         st.stop()
 
     st.caption("Upload an image or take a photo to detect faces using MediaPipe.")

@@ -2,10 +2,12 @@ import streamlit as st
 import numpy as np
 from PIL import Image
 
+_import_error = None
 try:
     import cv2
-except Exception:
+except Exception as e:
     cv2 = None
+    _import_error = str(e)
 
 
 def _to_gray_blur(image_array):
@@ -37,11 +39,10 @@ def render():
     st.header("🏃 Motion Detection")
 
     if cv2 is None:
-        st.error(
-            "Motion detection requires **OpenCV**.\n\n"
-            "This library is not available in this cloud environment. "
-            "Run locally or in Docker."
-        )
+        st.error("Motion detection requires OpenCV.")
+        if _import_error:
+            st.code(_import_error, language="text")
+            st.info("Ensure `packages.txt` contains `libgl1-mesa-glx` and `libglib2.0-0`.")
         st.stop()
 
     st.caption("Compare two frames to detect motion using frame differencing.")
