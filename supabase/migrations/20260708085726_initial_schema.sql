@@ -30,6 +30,33 @@ create table public.profiles (
   constraint profiles_settings_object_check check (jsonb_typeof(settings) = 'object')
 );
 
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  insert into public.profiles (id, email, full_name, avatar_url)
+  values (
+    new.id,
+    new.email,
+    new.raw_user_meta_data ->> 'full_name',
+    new.raw_user_meta_data ->> 'avatar_url'
+  )
+  on conflict (id) do update
+    set email = excluded.email,
+        full_name = coalesce(public.profiles.full_name, excluded.full_name),
+        avatar_url = coalesce(public.profiles.avatar_url, excluded.avatar_url);
+
+  return new;
+end;
+$$;
+
+create trigger on_auth_user_created
+after insert on auth.users
+for each row execute function public.handle_new_user();
+
 create table public.computer_vision_projects (
   id uuid primary key default gen_random_uuid(),
   owner_id uuid not null references public.profiles(id) on delete cascade,
@@ -223,7 +250,7 @@ with check (
   and exists (
     select 1
     from public.computer_vision_projects
-    where computer_vision_projects.id = analyses.project_id
+    where computer_vision_projects.id = project_id
       and computer_vision_projects.owner_id = auth.uid()
   )
 );
@@ -237,7 +264,7 @@ with check (
   and exists (
     select 1
     from public.computer_vision_projects
-    where computer_vision_projects.id = analyses.project_id
+    where computer_vision_projects.id = project_id
       and computer_vision_projects.owner_id = auth.uid()
   )
 );
@@ -262,7 +289,7 @@ with check (
     or exists (
       select 1
       from public.computer_vision_projects
-      where computer_vision_projects.id = image_metadata.project_id
+      where computer_vision_projects.id = project_id
         and computer_vision_projects.owner_id = auth.uid()
     )
   )
@@ -271,7 +298,7 @@ with check (
     or exists (
       select 1
       from public.analyses
-      where analyses.id = image_metadata.analysis_id
+      where analyses.id = analysis_id
         and analyses.owner_id = auth.uid()
     )
   )
@@ -288,7 +315,7 @@ with check (
     or exists (
       select 1
       from public.computer_vision_projects
-      where computer_vision_projects.id = image_metadata.project_id
+      where computer_vision_projects.id = project_id
         and computer_vision_projects.owner_id = auth.uid()
     )
   )
@@ -297,7 +324,7 @@ with check (
     or exists (
       select 1
       from public.analyses
-      where analyses.id = image_metadata.analysis_id
+      where analyses.id = analysis_id
         and analyses.owner_id = auth.uid()
     )
   )
@@ -323,7 +350,7 @@ with check (
     or exists (
       select 1
       from public.computer_vision_projects
-      where computer_vision_projects.id = analytics_events.project_id
+      where computer_vision_projects.id = project_id
         and computer_vision_projects.owner_id = auth.uid()
     )
   )
@@ -332,7 +359,7 @@ with check (
     or exists (
       select 1
       from public.analyses
-      where analyses.id = analytics_events.analysis_id
+      where analyses.id = analysis_id
         and analyses.owner_id = auth.uid()
     )
   )
