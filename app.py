@@ -3,6 +3,9 @@ import computervision
 
 from services.supabase_client import supabase
 
+# --------------------------------------------------
+# Page Configuration
+# --------------------------------------------------
 st.set_page_config(
     page_title="Computer Vision Lab",
     page_icon="🧪",
@@ -14,53 +17,23 @@ st.caption("Experiment with pretrained computer vision models.")
 st.divider()
 
 # --------------------------------------------------
-# Debug Supabase Configuration
+# Supabase Status
 # --------------------------------------------------
-st.subheader("🔍 Supabase Debug")
-
 try:
-    st.write("**Project URL:**", st.secrets["SUPABASE_URL"])
+    supabase.table("profiles").select("id").limit(1).execute()
+    st.sidebar.success("🟢 Supabase Connected")
 
-    key = st.secrets["SUPABASE_KEY"]
-    st.write("**API Key Prefix:**", key[:20] + "...")
-
-except Exception as e:
-    st.error("❌ Could not read Streamlit secrets.")
-    st.exception(e)
-
-st.divider()
+except Exception:
+    st.sidebar.error("🔴 Supabase Offline")
 
 # --------------------------------------------------
-# Test Supabase Connection
-# --------------------------------------------------
-st.subheader("🗄️ Supabase Connection Test")
-
-try:
-    result = (
-        supabase
-        .table("profiles")
-        .select("*")
-        .limit(1)
-        .execute()
-    )
-
-    st.success("✅ Connected to Supabase")
-    st.write("Profiles table response:")
-    st.json(result.data)
-
-except Exception as e:
-    st.error("❌ Failed to connect to Supabase")
-    st.exception(e)
-
-st.divider()
-
-# --------------------------------------------------
-# Launch Computer Vision App
+# Launch Application
 # --------------------------------------------------
 try:
     if hasattr(computervision, "render"):
         computervision.render()
     else:
-        st.error("computervision module does not have a render() function.")
+        st.error("The computervision module is missing the render() function.")
+
 except Exception as e:
-    st.error(f"An unexpected error occurred: {e}")
+    st.exception(e)
