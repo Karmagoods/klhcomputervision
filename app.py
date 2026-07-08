@@ -14,18 +14,39 @@ st.caption("Experiment with pretrained computer vision models.")
 st.divider()
 
 # --------------------------------------------------
+# Debug Supabase Configuration
+# --------------------------------------------------
+st.subheader("🔍 Supabase Debug")
+
+try:
+    st.write("**Project URL:**", st.secrets["SUPABASE_URL"])
+
+    key = st.secrets["SUPABASE_KEY"]
+    st.write("**API Key Prefix:**", key[:20] + "...")
+
+except Exception as e:
+    st.error("❌ Could not read Streamlit secrets.")
+    st.exception(e)
+
+st.divider()
+
+# --------------------------------------------------
 # Test Supabase Connection
 # --------------------------------------------------
+st.subheader("🗄️ Supabase Connection Test")
+
 try:
     result = (
         supabase
         .table("profiles")
-        .select("id")
+        .select("*")
         .limit(1)
         .execute()
     )
 
     st.success("✅ Connected to Supabase")
+    st.write("Profiles table response:")
+    st.json(result.data)
 
 except Exception as e:
     st.error("❌ Failed to connect to Supabase")
