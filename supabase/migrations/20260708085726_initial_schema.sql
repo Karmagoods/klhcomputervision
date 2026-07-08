@@ -48,12 +48,13 @@ create table public.computer_vision_projects (
   constraint computer_vision_projects_type_check check (
     project_type in ('general', 'object_detection', 'face_detection', 'motion_detection', 'classification', 'segmentation')
   ),
-  constraint computer_vision_projects_configuration_object_check check (jsonb_typeof(configuration) = 'object')
+  constraint computer_vision_projects_configuration_object_check check (jsonb_typeof(configuration) = 'object'),
+  constraint computer_vision_projects_id_owner_unique unique (id, owner_id)
 );
 
 create table public.analyses (
   id uuid primary key default gen_random_uuid(),
-  project_id uuid not null references public.computer_vision_projects(id) on delete cascade,
+  project_id uuid not null,
   owner_id uuid not null references public.profiles(id) on delete cascade,
   status text not null default 'queued',
   analysis_type text not null,
@@ -73,7 +74,10 @@ create table public.analyses (
   constraint analyses_type_not_blank check (length(btrim(analysis_type)) > 0),
   constraint analyses_confidence_score_check check (confidence_score is null or confidence_score between 0 and 1),
   constraint analyses_parameters_object_check check (jsonb_typeof(parameters) = 'object'),
-  constraint analyses_results_object_check check (jsonb_typeof(results) = 'object')
+  constraint analyses_results_object_check check (jsonb_typeof(results) = 'object'),
+  constraint analyses_id_owner_unique unique (id, owner_id),
+  constraint analyses_project_owner_fk foreign key (project_id, owner_id)
+    references public.computer_vision_projects(id, owner_id) on delete cascade
 );
 
 create table public.image_metadata (
