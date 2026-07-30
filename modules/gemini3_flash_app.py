@@ -117,8 +117,8 @@ def render():
     st.sidebar.subheader("Detection Settings")
     classes   = st.sidebar.multiselect(
         "Classes to detect",
-        ["fish", "people", "eyes", "car", "animal", "text"],
-        default=["fish", "people", "eyes"]
+        ["fish", "people", "eyes", "car", "animal", "text", "bottle"],
+        default=["fish", "people", "eyes", "bottle"]
     )
     threshold = st.sidebar.slider("Confidence threshold (%)", 0, 100, 50)
     use_cache = st.sidebar.checkbox("Cache workflow results", True)
@@ -170,6 +170,30 @@ def render():
     cols = st.columns(min(len(counts), 4))
     for i, (cls, cnt) in enumerate(counts.items()):
         cols[i % len(cols)].metric(cls.title(), cnt)
+
+    # --------------------------------------------------
+    # Log to Supabase
+    # --------------------------------------------------
+    try:
+        from services.supabase_client import supabase
+        import datetime
+
+        bottle_count = counts.get("bottle", 0)
+        analysis_text = f"Gemini 3 Flash detection complete. Detected classes: {dict(counts)}"
+        
+        insert_data = {
+            "created_at": datetime.timezone.utc, # Wait, psycopg2/supabase client expects string or datetime object. datetime.datetime.now(datetime.timezone.utc).isoformat() is safest.
+            "bottle_count": bottle_count,
+            "gemini_analysis": analysis_text,
+            "image_url": None
+        }
+        # Let's use isoformat string for datetime to prevent serialization errors.
+        insert_data["created_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+        supabase.table("pub_inventory_logs").insert(insert_data).execute()
+        st.sidebar.success("💾 Logged to Supabase!")
+    except Exception as db_err:
+        st.sidebar.warning(f"⚠️ Supabase log failed: {db_err}")
 
     st.divider()
     c1, c2 = st.columns(2)

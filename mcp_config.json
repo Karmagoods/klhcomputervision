@@ -1,0 +1,25 @@
+{
+  "mcpServers": {
+    "supabase": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@supabase/mcp"
+      ],
+      "env": {
+        "SUPABASE_URL": "YOUR_SUPABASE_PROJECT_URL",
+        "SUPABASE_ACCESS_TOKEN": "YOUR_SUPABASE_PERSONAL_ACCESS_TOKEN"
+      }
+    },
+    "roboflow": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@roboflow/mcp-server"
+      ],
+      "env": {
+        "ROBOFLOW_API_KEY": "YOUR_ROBOFLOW_API_KEY"
+      }
+    }
+  }
+}
