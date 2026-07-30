@@ -1,38 +1,71 @@
+import requests
+import datetime
 import streamlit as st
-
+from services.supabase_client import supabase  # Reuses your global validated client
 
 def render():
-    st.sidebar.header("🧪 CV Lab")
-    st.sidebar.markdown("---")
+    st.subheader("✨ Gemini 3 Flash Bar & Pub AI")
+    st.write("Combine high-speed object tracking with contextual conversational vision reasoning.")
+    st.divider()
 
-    tool_name = st.sidebar.radio(
-        "Choose a module",
-        [
-            "🔍 Roboflow Detect",
-            "✨ Gemini 3 Flash",
-            "🏃 Motion Detection",
-            "🙂 Face Detection",
-        ],
-        label_visibility="collapsed"
+    # 1. Accept dynamic context questions for Gemini
+    user_question = st.text_input(
+        "Ask Gemini about what the camera can see:", 
+        placeholder="Are the bottles running low? Any drink spills or hazards on the counter?",
+        key="gemini_bar_prompt"
     )
 
-    st.sidebar.markdown("---")
-    st.sidebar.caption("Built with MediaPipe · OpenCV · Roboflow · Google Gemini")
+    # 2. Capture mobile smartphone camera input snapshot
+    img_file = st.camera_input("Take a snapshot of your bar shelves or counter")
 
-    # Lazy imports — so a failed cv2/mediapipe import only breaks THAT module,
-    # not the entire app. Each module handles its own import errors gracefully.
-    if tool_name == "🔍 Roboflow Detect":
-        from modules import roboflow_detect
-        roboflow_detect.render()
-
-    elif tool_name == "✨ Gemini 3 Flash":
-        from modules import gemini3_flash_app
-        gemini3_flash_app.render()
-
-    elif tool_name == "🏃 Motion Detection":
-        from modules import motion
-        motion.render()
-
-    elif tool_name == "🙂 Face Detection":
-        from modules import face_detect
-        face_detect.render()
+    if img_file:
+        image_bytes = img_file.getvalue()
+        
+        # Trigger explicit deployment action button to prevent multiple API fires on change
+        if st.button("🚀 Run Smart Bar Analysis", type="primary"):
+            with st.spinner("Processing image via Roboflow Serverless Workflows..."):
+                try:
+                    # Pull verified global API keys from st.secrets
+                    rf_api_key = st.secrets["ROBOFLOW_API_KEY"]
+                    
+                    # Point to your dedicated serverless deployment endpoint structure
+                    workflow_url = f"https://roboflow.com{rf_api_key}"
+                    
+                    # Package the camera frames and inputs
+                    files = {"image": ("image.jpg", image_bytes, "image/jpeg")}
+                    data = {"gemini_prompt": user_question}
+                    
+                    # Dispatch to Roboflow workflow broker engine
+                    response = requests.post(workflow_url, files=files, data=data)
+                    response.raise_for_status()
+                    result = response.json()
+                    
+                    # Extract variables safely matching your defined output structure
+                    bottle_count = result.get("bottle_count_output", 0)
+                    gemini_report = result.get("gemini_analysis_output", "No conversational response returned.")
+                    
+                    # 3. Present UI layout outputs
+                    st.success("Analysis Complete!")
+                    
+                    col1, col2 = st.columns([1, 3])
+                    with col1:
+                        st.metric(label="🍾 Bottles Identified", value=int(bottle_count))
+                    with col2:
+                        st.info(f"**Gemini Analysis Summary:** {gemini_report}")
+                    
+                    # 4. Insert directly into your verified Supabase Schema columns
+                    with st.spinner("Logging transaction data into cloud server tables..."):
+                        log_entry = {
+                            "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                            "bottle_count": int(bottle_count),
+                            "gemini_analysis": gemini_report,
+                            "image_url": None  # Explicitly passed as None as verified via schema checks
+                        }
+                        
+                        supabase.table("pub_inventory_logs").insert(log_entry).execute()
+                        st.toast("📊 Record successfully added to pub_inventory_logs table!", icon="💾")
+                        
+                except requests.exceptions.HTTPError as http_err:
+                    st.error(f"Network Pipeline Error: Could not resolve serverless route. Verify your Workflow layout ID is published inside your Roboflow dashboard. ({http_err})")
+                except Exception as e:
+                    st.error(f"Processing error encountered: {e}")
