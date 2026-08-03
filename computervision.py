@@ -58,7 +58,7 @@ def render():
     if image is None:
         return
 
-    st.image(image, caption="Input image", use_container_width=True)
+    st.image(image, caption="Input image", use_column_width=True)
 
     if not st.button("🚀 Run Smart Bar Analysis", type="primary"):
         return
@@ -107,7 +107,7 @@ def render():
     if result.output_image_path and result.output_image_path.exists():
         try:
             annotated_img = Image.open(result.output_image_path)
-            st.image(annotated_img, caption="📷 Annotated Detection View", use_container_width=True)
+            st.image(annotated_img, caption="📷 Annotated Detection View", use_column_width=True)
         finally:
             # Remove temp file — never hold base64 blobs longer than needed
             try:
