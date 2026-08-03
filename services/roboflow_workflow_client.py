@@ -19,14 +19,14 @@ from PIL import Image
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Constants — REST endpoint structure for Roboflow Workflows
-# ---------------------------------------------------------------------------
 _WORKSPACE = "klhinnovation"
 _WORKFLOW_ID = "playground-gemini-3-flash-object-detection"
 
-# Official Workflow REST endpoint
-_ENDPOINT = f"https://detect.roboflow.com/infer/workflows/{_WORKSPACE}/{_WORKFLOW_ID}"
+# Endpoints to try sequentially
+_ENDPOINTS = [
+    f"https://detect.roboflow.com/infer/workflows/{_WORKSPACE}/{_WORKFLOW_ID}",
+    f"https://serverless.roboflow.com/{_WORKSPACE}/workflows/{_WORKFLOW_ID}",
+]
 
 _DEFAULT_GEMINI_PROMPT = (
     "You are a bar inventory assistant. "
@@ -34,9 +34,8 @@ _DEFAULT_GEMINI_PROMPT = (
     "Identify any spills or hazards. "
     "Give a concise operational summary."
 )
-_TIMEOUT_SECONDS = 60
-_MAX_RETRIES = 2
-_BACKOFF_BASE = 1.0
+_MAX_DIMENSION = 1024  # Prevents 502 Gateway Payload limits
+_TIMEOUT_SECONDS = 45
 
 
 class WorkflowError(Exception): pass
@@ -44,8 +43,7 @@ class RoboflowAPIError(WorkflowError):
     def __init__(self, status_code: int, body: str) -> None:
         self.status_code = status_code
         self.body = body
-        super().__init__(f"Roboflow API returned HTTP {status_code}: {body[:300]}")
-class NetworkError(WorkflowError): pass
+        super().__init__(f"Roboflow API returned HTTP {status_code}: {body[:250]}")
 
 
 @dataclass
@@ -56,16 +54,33 @@ class WorkflowResult:
     raw_outputs: dict = field(default_factory=dict)
 
 
-def _image_to_base64(image: Image.Image) -> str:
-    """Convert PIL image to base64 JPEG string."""
+def _prepare_image_base64(image: Image.Image, max_dim: int = _MAX_DIMENSION) -> str:
+    """Resize image to fit max_dim and convert to base64 JPEG."""
+    img = image.copy()
+    
+    # Ensure RGB
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+        
+    # Resize down if larger than max_dim to avoid Cloudflare 502 payload drops
+    w, h = img.size
+    if max(w, h) > max_dim:
+        if w > h:
+            new_w = max_dim
+            new_h = int(h * (max_dim / w))
+        else:
+            new_h = max_dim
+            new_w = int(w * (max_dim / h))
+        img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
     buf = io.BytesIO()
-    image.save(buf, format="JPEG", quality=90)
+    img.save(buf, format="JPEG", quality=85)
     buf.seek(0)
     return base64.b64encode(buf.read()).decode("utf-8")
 
 
 def _decode_output_image(b64_value: str, suffix: str = ".jpg") -> Optional[Path]:
-    """Decode base64 string back to disk."""
+    """Decode base64 result to a temp file."""
     try:
         if "," in b64_value:
             b64_value = b64_value.split(",", 1)[1]
@@ -89,10 +104,10 @@ def run_bar_pub_workflow(
     google_api_key: str,
     gemini_prompt: str = _DEFAULT_GEMINI_PROMPT,
 ) -> WorkflowResult:
-    """Execute Roboflow Workflow via standard REST API."""
-    b64_image = _image_to_base64(image)
+    """Run Gemini Flash Bar & Pub Detection workflow."""
+    
+    b64_image = _prepare_image_base64(image)
 
-    # Payload structured per Roboflow Workflow REST Specs
     payload = {
         "api_key": roboflow_api_key,
         "inputs": {
@@ -106,39 +121,34 @@ def run_bar_pub_workflow(
     }
 
     headers = {"Content-Type": "application/json"}
+    last_err = None
 
-    last_exc: Exception = WorkflowError("No attempts made")
-    for attempt in range(_MAX_RETRIES + 1):
-        if attempt > 0:
-            backoff = _BACKOFF_BASE * (2 ** (attempt - 1))
-            logger.info("Retrying workflow call in %.1fs...", backoff)
-            time.sleep(backoff)
-
+    for endpoint in _ENDPOINTS:
         try:
-            resp = requests.post(_ENDPOINT, json=payload, headers=headers, timeout=_TIMEOUT_SECONDS)
-        except requests.exceptions.Timeout as exc:
-            last_exc = NetworkError(f"Request timed out: {exc}")
-            continue
-        except requests.exceptions.RequestException as exc:
-            last_exc = NetworkError(f"Request failed: {exc}")
-            continue
+            resp = requests.post(
+                f"{endpoint}?api_key={roboflow_api_key}",
+                json=payload,
+                headers=headers,
+                timeout=_TIMEOUT_SECONDS
+            )
 
-        if resp.status_code >= 400:
-            err = RoboflowAPIError(resp.status_code, resp.text)
-            if resp.status_code < 500:
-                raise err
-            last_exc = err
-            continue
+            if resp.status_code == 200:
+                return _parse_response(resp.json())
 
-        try:
-            data = resp.json()
+            # If HTML error string returned (e.g. Cloudflare 502)
+            if "html" in resp.headers.get("Content-Type", "").lower() or "<!DOCTYPE" in resp.text:
+                last_err = RoboflowAPIError(resp.status_code, "Gateway proxy error (HTML returned)")
+                continue
+
+            last_err = RoboflowAPIError(resp.status_code, resp.text)
+
         except Exception as exc:
-            last_exc = WorkflowError(f"Could not parse JSON response: {exc}")
+            last_err = exc
             continue
 
-        return _parse_response(data)
-
-    raise last_exc
+    if last_err:
+        raise last_err
+    raise WorkflowError("All endpoint attempts failed.")
 
 
 def _parse_response(data: dict | list) -> WorkflowResult:
@@ -158,7 +168,7 @@ def _parse_response(data: dict | list) -> WorkflowResult:
     else:
         item = {}
 
-    # 1. Bounding box detections
+    # Predictions
     raw_preds = item.get("predictions", {})
     if isinstance(raw_preds, dict):
         predictions: list = raw_preds.get("predictions", [])
@@ -167,12 +177,12 @@ def _parse_response(data: dict | list) -> WorkflowResult:
     else:
         predictions = []
 
-    # 2. Gemini text response
+    # Gemini Text Response
     gemini_text: str = item.get("gemini_analysis_output", "") or ""
     if isinstance(gemini_text, dict):
         gemini_text = gemini_text.get("output", gemini_text.get("value", str(gemini_text)))
 
-    # 3. Annotated Visualization Image
+    # Output Annotated Image
     output_image_path: Optional[Path] = None
     raw_img = item.get("output_image")
     if isinstance(raw_img, dict):
