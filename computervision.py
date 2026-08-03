@@ -1,107 +1,138 @@
-import requests
-import base64
+import os
 import datetime
 import streamlit as st
-from services.supabase_client import supabase  # Reuses your global validated client
+from pathlib import Path
+from PIL import Image
+from collections import Counter
+
+from services.supabase_client import supabase
+from services.roboflow_workflow_client import (
+    run_bar_pub_workflow,
+    WorkflowResult,
+    WorkflowError,
+    RoboflowAPIError,
+    NetworkError,
+)
+
 
 def render():
-    st.subheader("✨ Gemini 3 Flash Bar & Pub AI")
-    st.write("Combine high-speed object tracking with contextual conversational vision reasoning.")
+    st.subheader("✨ Gemini Flash Bar & Pub AI")
+    st.write(
+        "COCO object detection + Google Gemini conversational analysis, "
+        "powered by Roboflow Serverless Workflows."
+    )
     st.divider()
 
-    # 1. Accept dynamic context questions for Gemini
-    user_question = st.text_input(
-        "Ask Gemini about what the camera can see:", 
-        placeholder="Are the bottles running low? Any drink spills or hazards on the counter?",
-        key="gemini_bar_prompt"
+    # ------------------------------------------------------------------
+    # API keys — follow repo pattern: st.secrets first, then os.getenv
+    # ------------------------------------------------------------------
+    ROBOFLOW_KEY = st.secrets.get("ROBOFLOW_API_KEY") or os.getenv("ROBOFLOW_API_KEY")
+    GOOGLE_KEY   = st.secrets.get("GOOGLE_API_KEY")   or os.getenv("GOOGLE_API_KEY")
+
+    missing = [k for k, v in [("ROBOFLOW_API_KEY", ROBOFLOW_KEY), ("GOOGLE_API_KEY", GOOGLE_KEY)] if not v]
+    if missing:
+        st.error(f"Missing secrets: {', '.join(missing)}")
+        st.stop()
+
+    # ------------------------------------------------------------------
+    # User controls
+    # ------------------------------------------------------------------
+    user_prompt = st.text_input(
+        "Ask Gemini about the scene:",
+        placeholder="Are the bottles running low? Any spills or hazards?",
+        key="gemini_bar_prompt",
     )
 
-    # 2. Capture mobile smartphone camera input snapshot
-    img_file = st.camera_input("Take a snapshot of your bar shelves or counter")
+    mode = st.radio("Input source", ["Upload Image", "Webcam"], horizontal=True)
+    image: Image.Image | None = None
 
-    if img_file:
-        image_bytes = img_file.getvalue()
-        
-        # Trigger explicit deployment action button to prevent multiple API fires on change
-        if st.button("🚀 Run Smart Bar Analysis", type="primary"):
-            with st.spinner("Processing image via Roboflow Serverless Workflows..."):
-                try:
-                    # Pull verified global API keys from st.secrets
-                    rf_api_key = st.secrets["ROBOFLOW_API_KEY"]
-                    google_api_key = st.secrets.get("GOOGLE_API_KEY", "")
+    if mode == "Upload Image":
+        f = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png"])
+        if f:
+            image = Image.open(f).convert("RGB")
+    else:
+        cam = st.camera_input("Take a snapshot of your bar shelves or counter")
+        if cam:
+            image = Image.open(cam).convert("RGB")
 
-                    # 🛠️ Roboflow Workspace & Workflow details
-                    workspace_id = "klhinnovation"
-                    workflow_id = "playground-gemini-3-flash-object-detection"
+    if image is None:
+        return
 
-                    # Correctly formatted Serverless Workflow Endpoint
-                    workflow_url = f"https://detect.roboflow.com/infer/workflows/{workspace_id}/{workflow_id}"
+    st.image(image, caption="Input image", use_container_width=True)
 
-                    # Encode image as base64 for JSON payload (required by Roboflow Workflows)
-                    image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+    if not st.button("🚀 Run Smart Bar Analysis", type="primary"):
+        return
 
-                    # Build JSON payload — Roboflow Workflows use JSON, not multipart
-                    payload = {
-                        "api_key": rf_api_key,
-                        "inputs": {
-                            "image": {
-                                "type": "base64",
-                                "value": image_b64
-                            },
-                            "gemini_prompt": user_question or "Count all visible bottles and drinks. Note any hazards or spills.",
-                            "google_api_key": google_api_key
-                        }
-                    }
+    # ------------------------------------------------------------------
+    # Run workflow
+    # ------------------------------------------------------------------
+    with st.spinner("Processing via Roboflow Serverless Workflow…"):
+        try:
+            result: WorkflowResult = run_bar_pub_workflow(
+                image=image,
+                roboflow_api_key=ROBOFLOW_KEY,
+                google_api_key=GOOGLE_KEY,
+                gemini_prompt=user_prompt or None,  # None → client uses workflow default
+            )
+        except RoboflowAPIError as e:
+            st.error(f"Roboflow API error {e.status_code}: {e.body[:300]}")
+            return
+        except NetworkError as e:
+            st.error(f"Network error: {e}")
+            return
+        except WorkflowError as e:
+            st.error(f"Workflow error: {e}")
+            return
 
-                    headers = {"Content-Type": "application/json"}
+    # ------------------------------------------------------------------
+    # Display results
+    # ------------------------------------------------------------------
+    st.success("✅ Analysis complete!")
 
-                    # Dispatch to Roboflow workflow broker engine
-                    response = requests.post(workflow_url, json=payload, headers=headers)
-                    response.raise_for_status()
-                    result = response.json()
+    # Counts from bounding-box predictions
+    predictions = result.predictions
+    counts = Counter(p.get("class", "object") for p in predictions)
 
-                    # Roboflow Workflows return results under outputs[0]
-                    outputs = result.get("outputs", [{}])[0]
+    drink_classes = {"bottle", "wine glass", "cup", "bowl", "vase"}
+    bottle_count = sum(cnt for cls, cnt in counts.items() if cls.lower() in drink_classes)
 
-                    # Extract variables safely matching workflow output names
-                    predictions = outputs.get("predictions", {})
-                    gemini_report = outputs.get("gemini_analysis_output", "No conversational response returned.")
-                    output_image = outputs.get("output_image")
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        st.metric(label="🍾 Drinks / Vessels Detected", value=int(bottle_count))
+        st.metric(label="🔍 Total Objects", value=len(predictions))
+    with col2:
+        st.info(f"**Gemini Analysis:** {result.gemini_analysis_output or 'No response returned.'}")
 
-                    # Count detected objects (bottles, cups, etc.) from predictions
-                    detections = predictions.get("predictions", []) if isinstance(predictions, dict) else []
-                    bottle_count = len([d for d in detections if d.get("class", "").lower() in [
-                        "bottle", "wine glass", "cup", "bowl", "vase"
-                    ]])
+    # Annotated image (decoded to disk by the client)
+    if result.output_image_path and result.output_image_path.exists():
+        try:
+            annotated_img = Image.open(result.output_image_path)
+            st.image(annotated_img, caption="📷 Annotated Detection View", use_container_width=True)
+        finally:
+            # Remove temp file — never hold base64 blobs longer than needed
+            try:
+                result.output_image_path.unlink(missing_ok=True)
+            except Exception:
+                pass
 
-                    # 3. Present UI layout outputs
-                    st.success("Analysis Complete!")
+    # Detection summary breakdown
+    if counts:
+        st.subheader("Detection Summary")
+        cols = st.columns(min(len(counts), 4))
+        for i, (cls, cnt) in enumerate(counts.items()):
+            cols[i % len(cols)].metric(cls.title(), cnt)
 
-                    col1, col2 = st.columns([1, 3])
-                    with col1:
-                        st.metric(label="🍾 Bottles / Drinks Identified", value=int(bottle_count))
-                    with col2:
-                        st.info(f"**Gemini Analysis Summary:** {gemini_report}")
-
-                    # Show annotated image if available
-                    if output_image:
-                        annotated_bytes = base64.b64decode(output_image.get("value", ""))
-                        if annotated_bytes:
-                            st.image(annotated_bytes, caption="📷 Annotated Detection View", use_container_width=True)
-
-                    # 4. Insert directly into your verified Supabase Schema columns
-                    with st.spinner("Logging transaction data into cloud server tables..."):
-                        log_entry = {
-                            "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                            "bottle_count": int(bottle_count),
-                            "gemini_analysis": gemini_report,
-                            "image_url": None  # Explicitly passed as None as verified via schema checks
-                        }
-                        
-                        supabase.table("pub_inventory_logs").insert(log_entry).execute()
-                        st.toast("📊 Record successfully added to pub_inventory_logs table!", icon="💾")
-                        
-                except requests.exceptions.HTTPError as http_err:
-                    st.error(f"Network Pipeline Error: Could not resolve serverless route. Verify your Workflow layout ID is published inside your Roboflow dashboard. ({http_err})")
-                except Exception as e:
-                    st.error(f"Processing error encountered: {e}")
+    # ------------------------------------------------------------------
+    # Log to Supabase
+    # ------------------------------------------------------------------
+    try:
+        log_entry = {
+            "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "bottle_count": int(bottle_count),
+            "gemini_analysis": result.gemini_analysis_output or "",
+            "image_url": None,
+        }
+        supabase.table("pub_inventory_logs").insert(log_entry).execute()
+        st.toast("📊 Record logged to pub_inventory_logs!", icon="💾")
+    except Exception as db_err:
+        st.sidebar.warning(f"⚠️ Supabase log failed: {db_err}")
