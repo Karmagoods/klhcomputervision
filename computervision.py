@@ -28,9 +28,9 @@ def render():
                     # Pull verified global API keys from st.secrets
                     rf_api_key = st.secrets["ROBOFLOW_API_KEY"]
                     
-                    # 🔧 REPLACE THESE WITH YOUR ROBOFLOW WORKSPACE & WORKFLOW IDS
-                    workspace_id = "your-workspace-id"
-                    workflow_id = "your-workflow-id"
+                    # 🛠️ Roboflow Workspace & Workflow details
+                    workspace_id = "klhinnovation"
+                    workflow_id = "playground-gemini-3-flash-object-detection"
                     
                     # Correctly formatted Serverless Workflow Endpoint
                     workflow_url = f"https://detect.roboflow.com/infer/workflows/{workspace_id}/{workflow_id}?api_key={rf_api_key}"
