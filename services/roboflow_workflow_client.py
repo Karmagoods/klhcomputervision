@@ -22,8 +22,8 @@ import base64
 import io
 import logging
 import os
-import time
 import tempfile
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -38,9 +38,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 _WORKSPACE = "klhinnovation"
 _WORKFLOW_ID = "playground-gemini-3-flash-object-detection"
-_ENDPOINT = (
-    f"https://serverless.roboflow.com/{_WORKSPACE}/workflows/{_WORKFLOW_ID}"
-)
+_ENDPOINT = f"https://serverless.roboflow.com/{_WORKSPACE}/workflows/{_WORKFLOW_ID}"
 _DEFAULT_GEMINI_PROMPT = (
     "You are a bar inventory assistant. "
     "Count all visible bottles, glasses, and drinks. "
@@ -103,7 +101,7 @@ class WorkflowResult:
 # Internal helpers
 # ---------------------------------------------------------------------------
 def _image_to_base64(image: Image.Image) -> str:
-    """Encode a PIL image as base64 JPEG (matches existing repo pattern)."""
+    """Encode a PIL image as base64 JPEG."""
     buf = io.BytesIO()
     image.save(buf, format="JPEG", quality=90)
     buf.seek(0)
@@ -111,12 +109,12 @@ def _image_to_base64(image: Image.Image) -> str:
 
 
 def _decode_output_image(b64_value: str, suffix: str = ".jpg") -> Optional[Path]:
-    """Decode a base64 image blob and write it to a temp file.
-
-    Returns the file path, or None on failure.  Never holds the blob in memory
-    longer than needed.
-    """
+    """Decode a base64 image blob and write it to a temp file."""
     try:
+        # Clean prefix if data URI format was passed
+        if "," in b64_value:
+            b64_value = b64_value.split(",", 1)[1]
+
         raw = base64.b64decode(b64_value)
         fd, path = tempfile.mkstemp(suffix=suffix, prefix="rf_bar_pub_")
         try:
@@ -153,45 +151,19 @@ def run_bar_pub_workflow(
     google_api_key: str,
     gemini_prompt: str = _DEFAULT_GEMINI_PROMPT,
 ) -> WorkflowResult:
-    """Run the Gemini Flash Bar & Pub Detection workflow on *image*.
-
-    Parameters
-    ----------
-    image:
-        PIL Image to analyse.
-    roboflow_api_key:
-        Roboflow API key.  Load from ``st.secrets`` or ``os.getenv``.
-    google_api_key:
-        Google Gemini API key.  Sent as workflow parameter ``google_api_key``.
-    gemini_prompt:
-        Prompt forwarded to Gemini.  Defaults to the bar-inventory prompt
-        declared in the workflow definition.
-
-    Returns
-    -------
-    WorkflowResult
-
-    Raises
-    ------
-    RoboflowAPIError
-        On 4xx / 5xx responses from the endpoint.
-    NetworkError
-        On connection / timeout failures after all retries are exhausted.
-    WorkflowError
-        On any other unexpected failure.
-    """
+    """Run the Gemini Flash Bar & Pub Detection workflow on *image*."""
     b64_image = _image_to_base64(image)
 
     payload = {
         "api_key": roboflow_api_key,
         "inputs": {
-            # input name "image" as declared in the workflow spec
             "image": {"type": "base64", "value": b64_image},
-            # parameter names exactly as declared in the workflow spec
             "gemini_prompt": gemini_prompt,
             "google_api_key": google_api_key,
         },
     }
+
+    headers = {"Content-Type": "application/json"}
 
     last_exc: Exception = WorkflowError("No attempts made")
     for attempt in range(_MAX_RETRIES + 1):
@@ -201,7 +173,7 @@ def run_bar_pub_workflow(
             time.sleep(backoff)
 
         try:
-            resp = requests.post(_ENDPOINT, json=payload, timeout=_TIMEOUT_SECONDS)
+            resp = requests.post(_ENDPOINT, json=payload, headers=headers, timeout=_TIMEOUT_SECONDS)
         except requests.exceptions.Timeout as exc:
             last_exc = NetworkError(f"Request timed out after {_TIMEOUT_SECONDS}s: {exc}")
             continue
@@ -213,14 +185,12 @@ def run_bar_pub_workflow(
             continue
 
         if resp.status_code >= 400:
-            # Don't retry client errors (4xx); always retry server errors (5xx)
             err = RoboflowAPIError(resp.status_code, resp.text)
             if resp.status_code < 500:
                 raise err
             last_exc = err
             continue
 
-        # Success path
         try:
             data = resp.json()
         except Exception as exc:
@@ -233,29 +203,26 @@ def run_bar_pub_workflow(
 
 
 def _parse_response(data: dict) -> WorkflowResult:
-    """Parse the Roboflow workflow JSON response into a WorkflowResult.
-
-    The response structure is::
-
-        {
-          "outputs": [
-            {
-              "predictions": { "predictions": [...], ... },  // bounding boxes
-              "gemini_analysis_output": "...",               // Gemini text
-              "output_image": { "type": "base64", "value": "..." }
-            }
-          ]
-        }
-    """
-    outputs_list = data.get("outputs", [])
-    if not isinstance(outputs_list, list) or not outputs_list:
-        logger.warning("Unexpected workflow response structure: %s", list(data.keys()))
+    """Parse the Roboflow workflow JSON response into a WorkflowResult."""
+    # Robust resolution: Handle both standard serverless dict array and single dict response structures
+    if isinstance(data, list) and len(data) > 0:
+        root_data = data[0]
+    elif isinstance(data, dict):
+        root_data = data
+    else:
+        logger.warning("Unexpected top-level response structure: %s", type(data))
         return WorkflowResult()
 
-    # One entry per input image; we always send exactly one image
-    item: dict = outputs_list[0] if outputs_list else {}
+    outputs = root_data.get("outputs", root_data)
 
-    # --- predictions (output key: "predictions") ---
+    if isinstance(outputs, list) and len(outputs) > 0:
+        item: dict = outputs[0]
+    elif isinstance(outputs, dict):
+        item = outputs
+    else:
+        item = {}
+
+    # --- 1. Predictions ---
     raw_preds = item.get("predictions", {})
     if isinstance(raw_preds, dict):
         predictions: list = raw_preds.get("predictions", [])
@@ -264,20 +231,18 @@ def _parse_response(data: dict) -> WorkflowResult:
     else:
         predictions = []
 
-    # Strip raw polygon points to keep payloads small (not present in COCO bboxes
-    # but guard defensively for future workflow changes)
     predictions = [
         {k: v for k, v in p.items() if k != "points"}
         for p in predictions
+        if isinstance(p, dict)
     ]
 
-    # --- gemini text (output key: "gemini_analysis_output") ---
+    # --- 2. Gemini Text Analysis ---
     gemini_text: str = item.get("gemini_analysis_output", "") or ""
     if isinstance(gemini_text, dict):
-        # Some workflow versions wrap text in {"output": "..."}
-        gemini_text = gemini_text.get("output", str(gemini_text))
+        gemini_text = gemini_text.get("output", gemini_text.get("value", str(gemini_text)))
 
-    # --- annotated image (output key: "output_image") ---
+    # --- 3. Annotated Image ---
     output_image_path: Optional[Path] = None
     raw_img = item.get("output_image")
     if isinstance(raw_img, dict):
