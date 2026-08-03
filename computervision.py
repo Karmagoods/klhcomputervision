@@ -27,19 +27,14 @@ def render():
         if st.button("🚀 Run Smart Bar Analysis", type="primary"):
             with st.spinner("Analyzing image..."):
                 try:
-                    # ----------------------------------------------------
-                    # LOAD 1: ROBOFLOW DIRECT MODEL INFERENCE (Count Objects)
-                    # ----------------------------------------------------
+                    # 1. ROBOFLOW DIRECT MODEL INFERENCE
                     rf_api_key = st.secrets["ROBOFLOW_API_KEY"]
                     
-                    # Direct hosted prediction call to your object detection model
-                    # Replace 'your-project-id' with your actual Roboflow project ID
+                    # Update with your actual Roboflow project ID
                     project_id = "your-project-id"  
                     model_version = "1"
                     
                     rf_url = f"https://detect.roboflow.com/{project_id}/{model_version}?api_key={rf_api_key}"
-                    
-                    # Encode image to base64 for direct model call
                     base64_image = base64.b64encode(image_bytes).decode("utf-8")
                     
                     rf_response = requests.post(
@@ -53,12 +48,9 @@ def render():
                         preds_list = rf_result.get("predictions", [])
                         bottle_count = len(preds_list)
                     else:
-                        # Fallback count if model endpoint call fails
                         bottle_count = 0
 
-                    # ----------------------------------------------------
-                    # LOAD 2: GOOGLE GEMINI SDK (Multimodal Reasoning)
-                    # ----------------------------------------------------
+                    # 2. GOOGLE GEMINI SDK (Using active model ID)
                     google_client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
                     
                     context_prompt = (
@@ -66,15 +58,14 @@ def render():
                         f"[Context: Object detection model identified {bottle_count} items in frame]."
                     )
 
+                    # Updated model parameter
                     gemini_response = google_client.models.generate_content(
                         model='gemini-2.5-flash',
                         contents=[pil_image, context_prompt]
                     )
                     gemini_report = gemini_response.text
 
-                    # ----------------------------------------------------
-                    # 3. UI DISPLAY & SUPABASE LOGGING
-                    # ----------------------------------------------------
+                    # 3. DISPLAY RESULTS & SUPABASE LOG
                     st.success("Analysis Complete!")
                     
                     col1, col2 = st.columns([1, 3])
