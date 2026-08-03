@@ -13,14 +13,7 @@
       }
     },
     "roboflow": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@roboflow/mcp-server"
-      ],
-      "env": {
-        "ROBOFLOW_API_KEY": "YOUR_ROBOFLOW_API_KEY"
-      }
+      "serverUrl": "https://mcp.roboflow.com/mcp"
     }
   }
 }
