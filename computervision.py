@@ -28,8 +28,12 @@ def render():
                     # Pull verified global API keys from st.secrets
                     rf_api_key = st.secrets["ROBOFLOW_API_KEY"]
                     
-                    # Point to your dedicated serverless deployment endpoint structure
-                    workflow_url = f"https://roboflow.com{rf_api_key}"
+                    # 🔧 REPLACE THESE WITH YOUR ROBOFLOW WORKSPACE & WORKFLOW IDS
+                    workspace_id = "your-workspace-id"
+                    workflow_id = "your-workflow-id"
+                    
+                    # Correctly formatted Serverless Workflow Endpoint
+                    workflow_url = f"https://detect.roboflow.com/infer/workflows/{workspace_id}/{workflow_id}?api_key={rf_api_key}"
                     
                     # Package the camera frames and inputs
                     files = {"image": ("image.jpg", image_bytes, "image/jpeg")}
