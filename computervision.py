@@ -60,7 +60,7 @@ def render():
 
                     # Updated model parameter
                     gemini_response = google_client.models.generate_content(
-                        model='gemini-2.5-flash',
+                        model='gemini-3.6-flash',
                         contents=[pil_image, context_prompt]
                     )
                     gemini_report = gemini_response.text
