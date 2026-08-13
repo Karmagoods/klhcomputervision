@@ -119,7 +119,7 @@ def render():
                             )
 
                             gemini_response = google_client.models.generate_content(
-                                model='gemini-2.0-flash',
+                                model='gemini-2.5-flash',
                                 contents=[pil_image, context_prompt]
                             )
                             gemini_report = gemini_response.text
@@ -179,7 +179,7 @@ def render():
                         st.warning("Local `deepface` library not available. Falling back to Gemini Multimodal analysis.")
                         if google_client:
                             response = google_client.models.generate_content(
-                                model="gemini-2.0-flash",
+                                model="gemini-2.5-flash",
                                 contents=["Identify the main faces in this photo. Describe their facial expressions, emotional state (e.g. Happy, Surprised, Neutral, Sad, Angry), and confidence level.", face_img]
                             )
                             st.markdown(response.text)
@@ -206,7 +206,7 @@ def render():
                     with st.spinner("Processing label details..."):
                         try:
                             response = google_client.models.generate_content(
-                                model="gemini-2.0-flash",
+                                model="gemini-2.5-flash",
                                 contents=["Extract all product information, brand names, lists, and warnings from this label image.", label_img],
                                 config={
                                     "response_mime_type": "application/json",
@@ -260,7 +260,7 @@ def render():
                     with st.spinner("Parsing structured invoice details..."):
                         try:
                             response = google_client.models.generate_content(
-                                model="gemini-2.0-flash",
+                                model="gemini-2.5-flash",
                                 contents=["Extract line items, prices, tax, vendor name, invoice date, and total financial amounts from this image.", inv_img],
                                 config={
                                     "response_mime_type": "application/json",
