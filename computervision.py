@@ -119,7 +119,7 @@ def render():
                             )
 
                             gemini_response = google_client.models.generate_content(
-                                model='gemini-2.5-flash',
+                                model='gemini-3.6-flash',
                                 contents=[pil_image, context_prompt]
                             )
                             gemini_report = gemini_response.text
@@ -157,7 +157,7 @@ def render():
 
         if face_file:
             face_img = Image.open(face_file)
-            st.image(face_img, caption="Input Image", use_container_width=True)
+            st.image(face_img, caption="Input Image", width="stretch")
 
             if st.button("Analyze Emotion", type="primary", key="btn_emotion"):
                 with st.spinner("Analyzing facial expressions..."):
@@ -179,7 +179,7 @@ def render():
                         st.warning("Local `deepface` library not available. Falling back to Gemini Multimodal analysis.")
                         if google_client:
                             response = google_client.models.generate_content(
-                                model="gemini-2.5-flash",
+                                model="gemini-3.6-flash",
                                 contents=["Identify the main faces in this photo. Describe their facial expressions, emotional state (e.g. Happy, Surprised, Neutral, Sad, Angry), and confidence level.", face_img]
                             )
                             st.markdown(response.text)
@@ -197,7 +197,7 @@ def render():
 
         if label_file:
             label_img = Image.open(label_file)
-            st.image(label_img, caption="Uploaded Label", use_container_width=True)
+            st.image(label_img, caption="Uploaded Label", width="stretch")
 
             if st.button("Extract Label Information", type="primary", key="btn_label"):
                 if not google_client:
@@ -206,7 +206,7 @@ def render():
                     with st.spinner("Processing label details..."):
                         try:
                             response = google_client.models.generate_content(
-                                model="gemini-2.5-flash",
+                                model="gemini-3.6-flash",
                                 contents=["Extract all product information, brand names, lists, and warnings from this label image.", label_img],
                                 config={
                                     "response_mime_type": "application/json",
@@ -251,7 +251,7 @@ def render():
 
         if invoice_file:
             inv_img = Image.open(invoice_file)
-            st.image(inv_img, caption="Uploaded Invoice", use_container_width=True)
+            st.image(inv_img, caption="Uploaded Invoice", width="stretch")
 
             if st.button("Parse Financial Data", type="primary", key="btn_invoice"):
                 if not google_client:
@@ -260,7 +260,7 @@ def render():
                     with st.spinner("Parsing structured invoice details..."):
                         try:
                             response = google_client.models.generate_content(
-                                model="gemini-2.5-flash",
+                                model="gemini-3.6-flash",
                                 contents=["Extract line items, prices, tax, vendor name, invoice date, and total financial amounts from this image.", inv_img],
                                 config={
                                     "response_mime_type": "application/json",
@@ -282,7 +282,7 @@ def render():
                             # Line Items Dataframe
                             st.markdown("##### 📋 Line Items")
                             if invoice.get("line_items"):
-                                st.dataframe(invoice["line_items"], use_container_width=True)
+                                st.dataframe(invoice["line_items"], width="stretch")
 
                             st.divider()
 
