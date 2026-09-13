@@ -51,6 +51,40 @@ class InvoiceData(BaseModel):
 # --------------------------------------------------
 # Main UI Render Function
 # --------------------------------------------------
+# -------------------------------------------------------
+# AudioLab text-to-speech
+# -------------------------------------------------------
+def render_audio_reader(text: str, key: str, label: str = "Read results aloud"):
+    """Render a secure, on-demand AudioLab reader for a completed result."""
+    audio_state_key = f"audiolab_audio_{key}"
+
+    if st.button(label, key=f"audiolab_button_{key}"):
+        api_key = st.secrets.get("AUDIOLAB_API_KEY")
+        if not api_key:
+            st.error("Audio reading is not configured. Add AUDIOLAB_API_KEY to Streamlit secrets.")
+        else:
+            try:
+                with st.spinner("Creating audio..."):
+                    response = requests.post(
+                        "https://api.tryaudiolab.ai/v1/audio/speech",
+                        headers={"Authorization": f"Bearer {api_key}"},
+                        json={
+                            "model": "tts/auto",
+                            "voice": "auto",
+                            "input": text,
+                            "response_format": "mp3",
+                        },
+                        timeout=60,
+                    )
+                    response.raise_for_status()
+                    st.session_state[audio_state_key] = response.content
+            except requests.RequestException as exc:
+                st.error(f"Could not create audio: {exc}")
+
+    if audio_state_key in st.session_state:
+        st.audio(st.session_state[audio_state_key], format="audio/mpeg")
+
+
 def render():
     tab1, tab2, tab3, tab4 = st.tabs([
         "🍻 Bar & Pub AI",
@@ -126,12 +160,17 @@ def render():
 
                             # 3. DISPLAY RESULTS & SUPABASE LOG
                             st.success("Analysis Complete!")
-                            
+
                             col1, col2 = st.columns([1, 3])
                             with col1:
                                 st.metric(label="🍾 Items Identified", value=int(bottle_count))
                             with col2:
                                 st.info(f"**Gemini Analysis Summary:**\n\n{gemini_report}")
+
+                            render_audio_reader(
+                                f"{bottle_count} items were identified. {gemini_report}",
+                                key="bar_result",
+                            )
 
                             log_entry = {
                                 "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -166,13 +205,18 @@ def render():
                             # Run local facial expression analysis
                             img_np = np.array(face_img)
                             results = DeepFace.analyze(img_np, actions=['emotion'], enforce_detection=False)
-                            
+
                             dominant = results[0]['dominant_emotion']
                             emotions = results[0]['emotion']
 
                             st.success(f"**Dominant Emotion:** {dominant.capitalize()}")
                             st.subheader("Emotion Confidence Distribution")
                             st.bar_chart(emotions)
+                            render_audio_reader(
+                                f"The dominant emotion detected is {dominant}. "
+                                f"Confidence scores: {json.dumps(emotions)}",
+                                key="emotion_result",
+                            )
                         except Exception as e:
                             st.error(f"DeepFace processing error: {e}")
                     else:
@@ -183,6 +227,7 @@ def render():
                                 contents=["Identify the main faces in this photo. Describe their facial expressions, emotional state (e.g. Happy, Surprised, Neutral, Sad, Angry), and confidence level.", face_img]
                             )
                             st.markdown(response.text)
+                            render_audio_reader(response.text, key="emotion_fallback_result")
                         else:
                             st.error("Gemini API Key is required for fallback.")
 
