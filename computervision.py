@@ -60,9 +60,20 @@ def render_audio_reader(text: str, key: str, label: str = "Read results aloud"):
 
     if st.button(label, key=f"audiolab_button_{key}"):
         api_key = st.secrets.get("AUDIOLAB_API_KEY")
+
         if not api_key:
-            st.error("Audio reading is not configured. Add AUDIOLAB_API_KEY to Streamlit secrets.")
+            st.error(
+                "Audio reading is not configured. "
+                "Add AUDIOLAB_API_KEY to Streamlit secrets."
+            )
         else:
+            api_key = api_key.strip()
+
+            st.info(
+                f"AudioLab key loaded: "
+                f"{api_key[:5]}...{api_key[-4:]}"
+            )
+
             try:
                 with st.spinner("Creating audio..."):
                     response = requests.post(
