@@ -191,8 +191,14 @@ def render():
         st.subheader("🎭 Facial Emotion Detection")
         st.write("Detect faces and analyze emotional expressions in real time.")
 
-        face_file = st.camera_input("Capture facial image", key="face_cam") or \
-                    st.file_uploader("Or upload image containing faces", type=["jpg", "jpeg", "png"], key="face_upload")
+        face_file = (
+            st.camera_input("Capture facial image", key="face_cam")
+            or st.file_uploader(
+                "Or upload image containing faces",
+                type=["jpg", "jpeg", "png"],
+                key="face_upload"
+            )
+        )
 
         if face_file:
             face_img = Image.open(face_file)
@@ -200,36 +206,88 @@ def render():
 
             if st.button("Analyze Emotion", type="primary", key="btn_emotion"):
                 with st.spinner("Analyzing facial expressions..."):
+
                     if HAS_DEEPFACE:
                         try:
                             # Run local facial expression analysis
                             img_np = np.array(face_img)
-                            results = DeepFace.analyze(img_np, actions=['emotion'], enforce_detection=False)
 
-                            dominant = results[0]['dominant_emotion']
-                            emotions = results[0]['emotion']
-
-                            st.success(f"**Dominant Emotion:** {dominant.capitalize()}")
-                            st.subheader("Emotion Confidence Distribution")
-                            st.bar_chart(emotions)
-                            render_audio_reader(
-                                f"The dominant emotion detected is {dominant}. "
-                                f"Confidence scores: {json.dumps(emotions)}",
-                                key="emotion_result",
+                            results = DeepFace.analyze(
+                                img_np,
+                                actions=["emotion"],
+                                enforce_detection=False
                             )
+
+                            dominant = results[0]["dominant_emotion"]
+                            emotions = results[0]["emotion"]
+
+                            # Save result so it survives Streamlit reruns
+                            st.session_state["emotion_result_text"] = (
+                                f"The dominant emotion detected is {dominant}. "
+                                f"Confidence scores: {json.dumps(emotions)}"
+                            )
+
+                            st.session_state["emotion_dominant"] = dominant
+                            st.session_state["emotion_scores"] = emotions
+
                         except Exception as e:
                             st.error(f"DeepFace processing error: {e}")
+
                     else:
-                        st.warning("Local `deepface` library not available. Falling back to Gemini Multimodal analysis.")
+                        st.warning(
+                            "Local `deepface` library not available. "
+                            "Falling back to Gemini Multimodal analysis."
+                        )
+
                         if google_client:
-                            response = google_client.models.generate_content(
-                                model="gemini-3.6-flash",
-                                contents=["Identify the main faces in this photo. Describe their facial expressions, emotional state (e.g. Happy, Surprised, Neutral, Sad, Angry), and confidence level.", face_img]
-                            )
-                            st.markdown(response.text)
-                            render_audio_reader(response.text, key="emotion_fallback_result")
+                            try:
+                                response = google_client.models.generate_content(
+                                    model="gemini-3.6-flash",
+                                    contents=[
+                                        "Identify the main faces in this photo. "
+                                        "Describe their facial expressions, emotional "
+                                        "state (e.g. Happy, Surprised, Neutral, Sad, Angry), "
+                                        "and confidence level.",
+                                        face_img
+                                    ]
+                                )
+
+                                # Save Gemini result so it survives reruns
+                                st.session_state["emotion_result_text"] = response.text
+                                st.session_state["emotion_dominant"] = None
+                                st.session_state["emotion_scores"] = None
+
+                            except Exception as e:
+                                st.error(f"Gemini emotion analysis failed: {e}")
+
                         else:
                             st.error("Gemini API Key is required for fallback.")
+
+            # --------------------------------------------------
+            # DISPLAY SAVED EMOTION RESULT
+            # --------------------------------------------------
+            if "emotion_result_text" in st.session_state:
+
+                dominant = st.session_state.get("emotion_dominant")
+                emotions = st.session_state.get("emotion_scores")
+                emotion_text = st.session_state["emotion_result_text"]
+
+                if dominant:
+                    st.success(
+                        f"**Dominant Emotion:** {dominant.capitalize()}"
+                    )
+
+                if emotions:
+                    st.subheader("Emotion Confidence Distribution")
+                    st.bar_chart(emotions)
+
+                st.markdown(emotion_text)
+
+                # AudioLab reader is now OUTSIDE the Analyze button
+                render_audio_reader(
+                    emotion_text,
+                    key="emotion_result"
+                )
 
     # ==================================================
     # TAB 3: LABEL READING
