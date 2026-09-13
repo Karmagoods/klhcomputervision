@@ -87,8 +87,14 @@ def render_audio_reader(text: str, key: str, label: str = "Read results aloud"):
                         },
                         timeout=60,
                     )
-                    response.raise_for_status()
-                    st.session_state[audio_state_key] = response.content
+
+                    if response.status_code != 200:
+                        st.error(
+                            f"AudioLab error {response.status_code}: "
+                            f"{response.text}"
+                        )
+                    else:
+                        st.session_state[audio_state_key] = response.content
             except requests.RequestException as exc:
                 st.error(f"Could not create audio: {exc}")
 
