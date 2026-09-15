@@ -31,21 +31,27 @@ except Exception:
 
 class LabelData(BaseModel):
     product_name: Optional[str] = Field(
+        default=None,
         description="Name or title of the product"
     )
     brand: Optional[str] = Field(
+        default=None,
         description="Brand or manufacturer name"
     )
     category: Optional[str] = Field(
+        default=None,
         description="Category e.g., Beverage, Food, Cosmetics, Medicine"
     )
     key_ingredients_or_details: List[str] = Field(
+        default_factory=list,
         description="List of ingredients, key specifications, or materials"
     )
     warnings_or_notes: List[str] = Field(
+        default_factory=list,
         description="Safety warnings, directions for use, or expiration notes"
     )
     raw_text: str = Field(
+        default="",
         description="Full extracted raw text from the label"
     )
 
@@ -70,18 +76,23 @@ class InvoiceData(BaseModel):
         description="Name of the business/vendor issuing the invoice"
     )
     invoice_number: Optional[str] = Field(
+        default=None,
         description="Invoice or receipt reference number"
     )
     date: Optional[str] = Field(
+        default=None,
         description="Date of transaction/invoice"
     )
     line_items: List[InvoiceItem] = Field(
+        default_factory=list,
         description="Detailed list of items/services purchased"
     )
     subtotal: Optional[float] = Field(
+        default=None,
         description="Subtotal before taxes"
     )
     tax_amount: Optional[float] = Field(
+        default=None,
         description="Calculated tax amount"
     )
     total_amount: float = Field(
@@ -124,12 +135,6 @@ def render_audio_reader(
             return
 
         api_key = str(api_key).strip()
-
-        # Safe debugging - NEVER display the full key
-        st.info(
-            f"AudioLab key loaded: "
-            f"{api_key[:5]}...{api_key[-4:]}"
-        )
 
         try:
             with st.spinner("Creating audio..."):
@@ -272,6 +277,13 @@ def render():
 
         if img_file:
 
+            # New image uploaded — clear any stale result from a
+            # previous image so we don't show mismatched analysis.
+            if st.session_state.get("bar_result_file_id") != img_file.file_id:
+                st.session_state.pop("bar_result_text", None)
+                st.session_state.pop("bar_bottle_count", None)
+                st.session_state["bar_result_file_id"] = img_file.file_id
+
             image_bytes = img_file.getvalue()
 
             pil_image = Image.open(
@@ -309,46 +321,71 @@ def render():
                             ""
                         )
 
-                        project_id = "your-project-id"
-                        model_version = "1"
-
-                        rf_url = (
-                            f"https://detect.roboflow.com/"
-                            f"{project_id}/"
-                            f"{model_version}"
-                            f"?api_key={rf_api_key}"
+                        # TODO: replace with your real trained
+                        # Roboflow project ID and version before
+                        # relying on this tab — with placeholders
+                        # this call always 404s and bottle_count
+                        # silently stays 0.
+                        project_id = st.secrets.get(
+                            "ROBOFLOW_PROJECT_ID", ""
+                        )
+                        model_version = st.secrets.get(
+                            "ROBOFLOW_MODEL_VERSION", "1"
                         )
 
-                        base64_image = base64.b64encode(
-                            image_bytes
-                        ).decode("utf-8")
+                        bottle_count = 0
 
-                        rf_response = requests.post(
-                            rf_url,
-                            data=base64_image,
-                            headers={
-                                "Content-Type":
-                                    "application/x-www-form-urlencoded"
-                            },
-                            timeout=60
-                        )
+                        if rf_api_key and project_id:
 
-                        if rf_response.status_code == 200:
-
-                            rf_result = rf_response.json()
-
-                            preds_list = rf_result.get(
-                                "predictions",
-                                []
+                            rf_url = (
+                                f"https://detect.roboflow.com/"
+                                f"{project_id}/"
+                                f"{model_version}"
+                                f"?api_key={rf_api_key}"
                             )
 
-                            bottle_count = len(
-                                preds_list
+                            base64_image = base64.b64encode(
+                                image_bytes
+                            ).decode("utf-8")
+
+                            rf_response = requests.post(
+                                rf_url,
+                                data=base64_image,
+                                headers={
+                                    "Content-Type":
+                                        "application/x-www-form-urlencoded"
+                                },
+                                timeout=60
                             )
+
+                            if rf_response.status_code == 200:
+
+                                rf_result = rf_response.json()
+
+                                preds_list = rf_result.get(
+                                    "predictions",
+                                    []
+                                )
+
+                                bottle_count = len(
+                                    preds_list
+                                )
+
+                            else:
+
+                                st.warning(
+                                    "Roboflow detection unavailable "
+                                    f"(status {rf_response.status_code}). "
+                                    "Falling back to Gemini-only analysis."
+                                )
 
                         else:
 
-                            bottle_count = 0
+                            st.info(
+                                "Roboflow object detection is not "
+                                "configured (missing ROBOFLOW_PROJECT_ID "
+                                "secret) — using Gemini-only analysis."
+                            )
 
 
                         # ====================================
@@ -523,6 +560,14 @@ def render():
 
         if face_file:
 
+            # New image uploaded — clear any stale result from a
+            # previous image so we don't show mismatched analysis.
+            if st.session_state.get("emotion_result_file_id") != face_file.file_id:
+                st.session_state.pop("emotion_result_text", None)
+                st.session_state.pop("emotion_dominant", None)
+                st.session_state.pop("emotion_scores", None)
+                st.session_state["emotion_result_file_id"] = face_file.file_id
+
             face_img = Image.open(face_file)
 
             st.image(
@@ -554,8 +599,11 @@ def render():
 
                         try:
 
+                            # Normalize to RGB first — RGBA (e.g.
+                            # from PNG uploads) breaks OpenCV/DeepFace's
+                            # face detector.
                             img_np = np.array(
-                                face_img
+                                face_img.convert("RGB")
                             )
 
                             results = DeepFace.analyze(
@@ -742,6 +790,12 @@ def render():
         )
 
         if label_file:
+
+            # New image uploaded — clear any stale result from a
+            # previous image so we don't show mismatched analysis.
+            if st.session_state.get("label_result_file_id") != label_file.file_id:
+                st.session_state.pop("label_result", None)
+                st.session_state["label_result_file_id"] = label_file.file_id
 
             label_img = Image.open(label_file)
 
@@ -968,6 +1022,12 @@ def render():
         )
 
         if invoice_file:
+
+            # New image uploaded — clear any stale result from a
+            # previous image so we don't show mismatched analysis.
+            if st.session_state.get("invoice_result_file_id") != invoice_file.file_id:
+                st.session_state.pop("invoice_result", None)
+                st.session_state["invoice_result_file_id"] = invoice_file.file_id
 
             inv_img = Image.open(
                 invoice_file
